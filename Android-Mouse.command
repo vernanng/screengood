@@ -1,10 +1,9 @@
 #!/bin/bash
-# Android-Mouse.command - Desktop. B MODE (default): NO mirror on Mac.
-#   Mac shows a blank phone-shaped PAD. Use your CABLE MOUSE on it, watch the Samsung TV:
-#     click = tap same spot on phone | drag = swipe | wheel in pad = NEXT/PREV | right-click = Back
+# Android-Mouse.command - Desktop. DEFAULT (double-click): scrcpy MIRROR.
+#   The PHONE SCREEN shows on the Mac. Inside it: click = tap | drag = swipe | right-click = Back
 #   ANYWHERE: light SHIFT+wheel = NEXT/PREV | SHIFT+middle/right-click = VIDEO pause/resume (listener)
-#   Sound comes from the TV (phone is making only ONE stream, so no scrcpy lag / no crackle).
-#   Old scrcpy mirror is still available:  ./Android-Mouse.command --mirror
+#   No-screen TV mode from Terminal instead:  ./Android-Mouse.command --pad
+#     (blank phone-shaped PAD, watch the TV - no scrcpy lag, but NO phone screen on the Mac)
 DIR="$(cd "$(dirname "$0")" && pwd)"  # wherever this file lives (Desktop today)
 if command -v brew >/dev/null 2>&1; then BREW_BIN="$(brew --prefix)/bin"
 elif [ -x /opt/homebrew/bin/adb ]; then BREW_BIN="/opt/homebrew/bin"
@@ -321,24 +320,26 @@ fi
 cleanup() { [ -n "$LISTENER_PID" ] && kill "$LISTENER_PID" 2>/dev/null; }
 trap cleanup EXIT INT TERM
 
-if [ "$1" = "--mirror" ]; then
-  [ -x "$SCRCPY" ] || brew install scrcpy
-  echo "=============================================="
-  echo " MIRROR MODE (scrcpy, laggy WiFi) -> $SERIAL"
-  echo "=============================================="
-  "$SCRCPY" -s "$SERIAL" --stay-awake --max-size 900 \
-    --window-title "Android - click=tap, light SHIFT+wheel=NEXT/PREV, SHIFT+click=tap"
-  RC=$?
-else
+if [ "$1" = "--pad" ]; then
   write_pad
   "$PY" "$PADFILE" --test
   echo "=============================================="
-  echo " B MODE: NO MIRROR - watch the TV, mouse on the PAD"
+  echo " PAD MODE: NO PHONE SCREEN on Mac - watch the TV, mouse on the PAD"
   echo " click=TAP | drag=swipe | wheel=NEXT/PREV | right-click=Back"
   echo " ANYWHERE: light SHIFT+wheel=NEXT/PREV | SHIFT+mid/right=pause"
   echo " Sound: TV speakers. Close the pad window to stop."
   echo "=============================================="
   "$PY" "$PADFILE"
+  RC=$?
+else  # default, incl. explicit --mirror: scrcpy mirror, phone screen on the Mac
+  [ -x "$SCRCPY" ] || brew install scrcpy
+  echo "=============================================="
+  echo " MIRROR MODE (scrcpy): PHONE SCREEN on Mac -> $SERIAL"
+  echo " click=TAP | drag=swipe | right-click=Back (inside mirror)"
+  echo " ANYWHERE: light SHIFT+wheel=NEXT/PREV | SHIFT+mid/right=pause"
+  echo "=============================================="
+  "$SCRCPY" -s "$SERIAL" --stay-awake --max-size 900 \
+    --window-title "Android - click=tap, light SHIFT+wheel=NEXT/PREV, SHIFT+click=tap"
   RC=$?
 fi
 cleanup

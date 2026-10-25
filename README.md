@@ -8,19 +8,20 @@ Mac mouse while the phone mirrors to a Samsung TV with Smart View. Everything is
 
 Double-click a launcher (or run it from Terminal):
 
-- `Android-Mouse.command` — main launcher. Default **B mode**: no video mirror on
-  the Mac (so no scrcpy lag/crackle; sound comes from the TV). A blank
-  phone-shaped pad window opens; use the mouse on it and watch the TV.
-  `./Android-Mouse.command --mirror` uses the old scrcpy mirror instead.
+- `Android-Mouse.command` — main launcher. **Double-click = scrcpy mirror:**
+  the phone screen shows on the Mac and mouse click = tap
+  (`--mirror` is an explicit alias for this default). From Terminal,
+  `./Android-Mouse.command --pad` uses the no-screen TV mode instead: a blank
+  phone-shaped pad window, watch the TV, no scrcpy lag, sound from the TV.
 - `Reels-Scroll.command` — listener only, no pad/mirror.
 
 Controls:
 
-- Pad: click = tap same spot (center = pause) · drag = swipe ·
+- Pad (`--pad`): click = tap same spot (center = pause) · drag = swipe ·
   wheel = NEXT/PREV · right-click = Android Back · Space = pause · ↑/↓ = PREV/NEXT
 - Anywhere on the Mac: light **SHIFT+wheel** down = NEXT, up = PREV ·
   **SHIFT+middle-click** (or SHIFT+right-click) = video pause/resume
-- In the scrcpy mirror (`--mirror`): click/drag work as touch; plain wheel is
+- In the scrcpy mirror (the default): click/drag work as touch; plain wheel is
   disabled there, and SHIFT+click is left to scrcpy so nothing double-taps.
 
 ## Setup (one time)
@@ -80,3 +81,27 @@ python3 fb-reels-pad.py --test
   scrcpy is misdetected; the listener steps aside there on purpose.
 - **Two `adb devices` entries for one phone** (IP + mDNS) is normal; the
   launchers pin one serial (`ADB_SERIAL`) for every command.
+
+## Decisions
+
+Status: **Draft** — decision interview in progress (2026-10-25). Nothing here
+is Final until the owner explicitly accepts it. This record lives in the
+README because it is the repository's only tracked document.
+
+### Settled
+
+- **Interview topic:** decide whether this tool is done at the committed state
+  (`80904d1`, review fixes landed) or has a next stage. Chosen over grilling a
+  different specific decision, or only where project decisions should live.
+- **Done vs. next stage:** done, conditional on one live run. There is no next
+  stage. Rationale: the tool already does its one job (this Mac, this phone,
+  this TV); the only unexercised surface after the fixes is a full live
+  launch, which `--test` cannot cover. If the live run exposes a bug, that
+  bug — and nothing else — becomes the remaining work. Rejected: declaring
+  done on `--test` evidence alone, and opening a next stage.
+
+### Unresolved
+
+- [ ] Exactly what the live run must cover to count (current question).
+- [ ] The done-means checklist, and the owner's explicit acceptance of the
+      scope contract (this section) once the checklist is fixed.
