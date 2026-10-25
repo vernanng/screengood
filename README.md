@@ -27,9 +27,12 @@ jitter absorption.
 Controls:
 
 - In the scrcpy mirror: click = tap · drag = swipe · right-click = Android Back ·
-  plain wheel while the cursor is on the mirror screen = NEXT/PREV
-- Anywhere on the Mac: light **SHIFT+wheel** down = NEXT, up = PREV ·
-  **SHIFT+middle-click** (or SHIFT+right-click) = video pause/resume
+  wheel scrolls the phone natively (scrcpy handles it)
+- Anywhere on the Mac: **SHIFT+wheel** functions exactly like wheeling while the
+  mouse is on the mirror screen — it is forwarded into the mirror as a plain
+  wheel event. (With no mirror window open, it falls back to light-scroll
+  NEXT/PREV swipes.) **SHIFT+middle-click** (or SHIFT+right-click) = video
+  pause/resume
 - SHIFT+click over the mirror is left to scrcpy, so nothing double-taps.
 
 ## Build it

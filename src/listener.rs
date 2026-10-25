@@ -1,7 +1,13 @@
-//! Global SHIFT+wheel / SHIFT+click listener: a 1:1 port of the Quartz
-//! `CGEventTap` in `fb-reels-scroll.py` (plan Q3: direct tap via
-//! `core-graphics`). One tap sees scroll + mouse-down events; the SHIFT
+//! Global SHIFT+wheel / SHIFT+click listener (plan Q3: direct `CGEventTap`
+//! via `core-graphics`). One tap sees scroll + mouse-down events; the SHIFT
 //! state comes from each event's flags, so no separate keyboard listener.
+//!
+//! SHIFT+wheel functions exactly like wheeling while the mouse is on the
+//! mirror screen: the original event is suppressed and a plain (no-SHIFT)
+//! copy is posted straight to the scrcpy process at the cursor-or-center
+//! point, so scrcpy scrolls the phone natively. Plain wheel is never
+//! intercepted. Only when no mirror window exists does SHIFT+wheel fall
+//! back to the accumulated NEXT/PREV adb swipes.
 
 use crate::adb::Adb;
 use crate::logic::{wheel_route, Action, Cooldown, Geometry, PixelAccumulator, WheelRoute};
@@ -12,11 +18,13 @@ use core_foundation::runloop::{kCFRunLoopCommonModes, CFRunLoop};
 use core_foundation::string::CFString;
 use core_graphics::event::{
     CGEvent, CGEventFlags, CGEventTap, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement,
-    CGEventTapProxy, CGEventType, CallbackResult, EventField,
+    CGEventTapProxy, CGEventType, CallbackResult, EventField, ScrollEventUnit,
 };
+use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
+use core_graphics::geometry::CGPoint;
 use core_graphics::window::{
     copy_window_info, kCGNullWindowID, kCGWindowBounds, kCGWindowListExcludeDesktopElements,
-    kCGWindowListOptionOnScreenOnly, kCGWindowOwnerName,
+    kCGWindowListOptionOnScreenOnly, kCGWindowOwnerName, kCGWindowOwnerPID,
 };
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -50,11 +58,21 @@ pub fn permissions_ok() -> bool {
 /// (x, y, width, height) of one scrcpy window, as in `scrcpy_bounds()`.
 type Bounds = (f64, f64, f64, f64);
 
-static BOUNDS_CACHE: Mutex<Option<(Instant, Vec<Bounds>)>> = Mutex::new(None);
+/// One scrcpy window plus the pid that owns it (wheel forwarding target).
+#[derive(Debug, Clone, Copy)]
+struct MirrorTarget {
+    pid: i32,
+    bounds: Bounds,
+}
 
-fn lock_bounds_cache() -> MutexGuard<'static, Option<(Instant, Vec<Bounds>)>> {
+static BOUNDS_CACHE: Mutex<Option<(Instant, Vec<MirrorTarget>)>> = Mutex::new(None);
+
+fn lock_bounds_cache() -> MutexGuard<'static, Option<(Instant, Vec<MirrorTarget>)>> {
     BOUNDS_CACHE.lock().unwrap_or_else(|e| e.into_inner())
 }
+
+/// Marks wheel events we synthesize, so they can never be re-intercepted.
+const SYNTHETIC_WHEEL_MAGIC: i64 = 0x5347_5757; // "SGWW"
 
 fn cf_type(ptr: *const c_void) -> Option<CFType> {
     if ptr.is_null() {
@@ -83,8 +101,16 @@ fn dict_value_f64(dict: &CFDictionary, key: &CFString) -> f64 {
     number.and_then(|n| n.to_f64()).unwrap_or(0.0)
 }
 
+fn dict_value_i32(dict: &CFDictionary, key: *const c_void) -> i32 {
+    let found = dict.find(key);
+    let number = found
+        .and_then(|value| cf_type(*value))
+        .and_then(|t| t.downcast::<CFNumber>());
+    number.and_then(|n| n.to_i32()).unwrap_or(0)
+}
+
 /// Port of `scrcpy_bounds()`'s window query; empty on any failure.
-fn query_scrcpy_bounds() -> Vec<Bounds> {
+fn query_scrcpy_windows() -> Vec<MirrorTarget> {
     let windows = match copy_window_info(
         kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements,
         kCGNullWindowID,
@@ -107,48 +133,67 @@ fn query_scrcpy_bounds() -> Vec<Bounds> {
         if !owner.to_lowercase().contains("scrcpy") {
             continue;
         }
+        let pid = dict_value_i32(&dict, unsafe { kCGWindowOwnerPID } as *const c_void);
         let bounds = match dict_value_dict(&dict, unsafe { kCGWindowBounds } as *const c_void) {
             Some(b) => b,
             None => {
-                out.push((0.0, 0.0, 0.0, 0.0));
+                out.push(MirrorTarget {
+                    pid,
+                    bounds: (0.0, 0.0, 0.0, 0.0),
+                });
                 continue;
             }
         };
-        out.push((
-            dict_value_f64(&bounds, &key_x),
-            dict_value_f64(&bounds, &key_y),
-            dict_value_f64(&bounds, &key_w),
-            dict_value_f64(&bounds, &key_h),
-        ));
+        out.push(MirrorTarget {
+            pid,
+            bounds: (
+                dict_value_f64(&bounds, &key_x),
+                dict_value_f64(&bounds, &key_y),
+                dict_value_f64(&bounds, &key_w),
+                dict_value_f64(&bounds, &key_h),
+            ),
+        });
     }
     out
 }
 
-fn scrcpy_bounds() -> Vec<Bounds> {
+fn scrcpy_windows() -> Vec<MirrorTarget> {
     let now = Instant::now();
     {
         let cache = lock_bounds_cache();
-        if let Some((at, bounds)) = &*cache {
+        if let Some((at, windows)) = &*cache {
             if now.duration_since(*at) < Duration::from_millis(500) {
-                return bounds.clone();
+                return windows.clone();
             }
         }
     }
-    let bounds: Vec<(f64, f64, f64, f64)> =
-        std::panic::catch_unwind(query_scrcpy_bounds).unwrap_or_default();
-    *lock_bounds_cache() = Some((now, bounds.clone()));
-    bounds
+    let windows: Vec<MirrorTarget> =
+        std::panic::catch_unwind(query_scrcpy_windows).unwrap_or_default();
+    *lock_bounds_cache() = Some((now, windows.clone()));
+    windows
+}
+
+fn point_in_bounds(x: f64, y: f64, bounds: Bounds) -> bool {
+    bounds.0 <= x && x <= bounds.0 + bounds.2 && bounds.1 <= y && y <= bounds.1 + bounds.3
 }
 
 /// True when the Mac cursor (x, y) is over the scrcpy mirror window.
 /// Bounds are cached for 0.5s, as in the Python code.
 pub fn scrcpy_at(x: f64, y: f64) -> bool {
-    for (bx, by, bw, bh) in scrcpy_bounds() {
-        if bx <= x && x <= bx + bw && by <= y && y <= by + bh {
-            return true;
-        }
-    }
-    false
+    scrcpy_windows()
+        .iter()
+        .any(|w| point_in_bounds(x, y, w.bounds))
+}
+
+/// The mirror window under (x, y), else the first mirror window, else none.
+fn mirror_target(x: f64, y: f64) -> Option<MirrorTarget> {
+    let windows = scrcpy_windows();
+    windows
+        .iter()
+        .find(|w| point_in_bounds(x, y, w.bounds))
+        .or_else(|| windows.first())
+        .copied()
+        .filter(|w| w.pid > 0)
 }
 
 struct ListenerState {
@@ -210,44 +255,105 @@ fn shift_held(event: &CGEvent) -> bool {
     event.get_flags().contains(CGEventFlags::CGEventFlagShift)
 }
 
-/// Port of the scroll-wheel half of `_quartz_cb` + `wheel_decision`.
+/// Integer wheel deltas for a synthetic PIXEL scroll event: point deltas
+/// pass through untouched; fixed-point deltas round to the nearest pixel
+/// (a nonzero sub-pixel nudge keeps its direction as ±1).
+fn wheel_ints(pdx: i64, pdy: i64, fdx: f64, fdy: f64) -> (i32, i32) {
+    fn one(pi: i64, fd: f64) -> i32 {
+        if pi != 0 {
+            return pi.clamp(i32::MIN as i64, i32::MAX as i64) as i32;
+        }
+        let r = fd.round();
+        if r == 0.0 && fd != 0.0 {
+            if fd > 0.0 {
+                1
+            } else {
+                -1
+            }
+        } else {
+            r.clamp(i32::MIN as f64, i32::MAX as f64) as i32
+        }
+    }
+    (one(pdx, fdx), one(pdy, fdy))
+}
+
+/// Forward a SHIFT+wheel tick into the mirror as a plain wheel event, so
+/// scrcpy scrolls the phone exactly as if the mouse were on the screen.
+/// Returns false when there is no mirror window (caller falls back).
+fn forward_wheel_to_mirror(event: &CGEvent, x: f64, y: f64, wdx: i32, wdy: i32) -> bool {
+    let target = match mirror_target(x, y) {
+        Some(t) => t,
+        None => return false,
+    };
+    if wdx == 0 && wdy == 0 {
+        return true; // consumed; nothing to forward
+    }
+    let (bx, by, bw, bh) = target.bounds;
+    let (lx, ly) = if point_in_bounds(x, y, target.bounds) {
+        (x, y)
+    } else {
+        (bx + bw / 2.0, by + bh / 2.0)
+    };
+    let source = match CGEventSource::new(CGEventSourceStateID::Private) {
+        Ok(s) => s,
+        Err(()) => return false,
+    };
+    let copy = match CGEvent::new_scroll_event(source, ScrollEventUnit::PIXEL, 2, wdy, wdx, 0) {
+        Ok(e) => e,
+        Err(()) => return false,
+    };
+    copy.set_location(CGPoint { x: lx, y: ly });
+    // Plain wheel, not SHIFT+wheel: scrcpy would read SHIFT as horizontal.
+    copy.set_flags(event.get_flags() - CGEventFlags::CGEventFlagShift);
+    copy.set_integer_value_field(EventField::EVENT_SOURCE_USER_DATA, SYNTHETIC_WHEEL_MAGIC);
+    copy.post_to_pid(target.pid);
+    true
+}
+
+/// SHIFT+wheel enters here; plain wheel is never intercepted, so wheeling
+/// on the mirror screen stays scrcpy-native.
 fn handle_scroll(event: &CGEvent) -> CallbackResult {
+    if event.get_integer_value_field(EventField::EVENT_SOURCE_USER_DATA) == SYNTHETIC_WHEEL_MAGIC {
+        return CallbackResult::Keep;
+    }
     let loc = event.location();
     let (x, y) = (loc.x, loc.y);
     let shift = shift_held(event);
+    if wheel_route(shift, false) == WheelRoute::Pass {
+        return CallbackResult::Keep;
+    }
     let pdx = event.get_integer_value_field(EventField::SCROLL_WHEEL_EVENT_POINT_DELTA_AXIS_2);
     let pdy = event.get_integer_value_field(EventField::SCROLL_WHEEL_EVENT_POINT_DELTA_AXIS_1);
+    let fdx = event.get_double_value_field(EventField::SCROLL_WHEEL_EVENT_FIXED_POINT_DELTA_AXIS_2);
+    let fdy = event.get_double_value_field(EventField::SCROLL_WHEEL_EVENT_FIXED_POINT_DELTA_AXIS_1);
+    let (wdx, wdy) = wheel_ints(pdx, pdy, fdx, fdy);
+    if forward_wheel_to_mirror(event, x, y, wdx, wdy) {
+        return CallbackResult::Drop;
+    }
+    // No mirror window: accumulated NEXT/PREV adb swipes (listen-only mode).
     let (dx, dy) = if pdx == 0 && pdy == 0 {
-        (
-            event.get_double_value_field(EventField::SCROLL_WHEEL_EVENT_FIXED_POINT_DELTA_AXIS_2),
-            event.get_double_value_field(EventField::SCROLL_WHEEL_EVENT_FIXED_POINT_DELTA_AXIS_1),
-        )
+        (fdx, fdy)
     } else {
         (pdx as f64, pdy as f64)
     };
-    match wheel_route(shift, scrcpy_at(x, y)) {
-        WheelRoute::Pass => CallbackResult::Keep,
-        WheelRoute::Consume => {
-            let fire = match lock_state() {
-                Some(mut st) => {
-                    let now = Instant::now();
-                    match st.acc.accumulate(dx, dy, now) {
-                        Some(action) if st.cooldown.try_fire(now) => {
-                            let cmd = st.cfg.adb.swipe_action_cmd(st.cfg.geo, action, 400);
-                            Some((st.cfg.adb.clone(), cmd, action))
-                        }
-                        _ => None,
-                    }
+    let fire = match lock_state() {
+        Some(mut st) => {
+            let now = Instant::now();
+            match st.acc.accumulate(dx, dy, now) {
+                Some(action) if st.cooldown.try_fire(now) => {
+                    let cmd = st.cfg.adb.swipe_action_cmd(st.cfg.geo, action, 400);
+                    Some((st.cfg.adb.clone(), cmd, action))
                 }
-                None => None,
-            };
-            if let Some((adb, cmd, action)) = fire {
-                println!("[{}] wheel -> {}", now_hms(), action_name(action));
-                adb.run_detached(&cmd);
+                _ => None,
             }
-            CallbackResult::Drop
         }
+        None => None,
+    };
+    if let Some((adb, cmd, action)) = fire {
+        println!("[{}] wheel -> {}", now_hms(), action_name(action));
+        adb.run_detached(&cmd);
     }
+    CallbackResult::Drop
 }
 
 /// Port of `on_click` (pressed only); clicks are never suppressed.
@@ -346,7 +452,7 @@ pub fn run(cfg: ListenerConfig) {
             std::process::exit(0);
         });
     } else {
-        println!("Hold SHIFT + wheel DOWN = NEXT | UP = PREV (light scroll ok) | SHIFT+middle-click (or SHIFT+right-click) = VIDEO pause/resume. Plain wheel while the cursor is on the mirror screen = NEXT/PREV too. Ctrl+C stops.");
+        println!("SHIFT + wheel = same as wheeling on the mirror screen (forwarded into the mirror; NEXT/PREV swipe when no mirror). SHIFT+middle-click (or SHIFT+right-click) = VIDEO pause/resume. Ctrl+C stops.");
     }
 
     let tap = match CGEventTap::new(
@@ -379,7 +485,7 @@ pub fn run(cfg: ListenerConfig) {
     };
     CFRunLoop::get_current().add_source(&loop_source, unsafe { kCFRunLoopCommonModes });
     tap.enable();
-    println!("Wheel tap ON: light SHIFT+wheel = NEXT/PREV | wheel on mirror screen = NEXT/PREV");
+    println!("Wheel tap ON: SHIFT+wheel forwards into the mirror as an on-screen wheel | plain wheel untouched");
     CFRunLoop::run_current();
 }
 
@@ -412,6 +518,17 @@ mod tests {
     fn action_names_match_python() {
         assert_eq!(action_name(Action::Next), "NEXT");
         assert_eq!(action_name(Action::Prev), "PREV");
+    }
+
+    #[test]
+    fn wheel_ints_forwarding_deltas() {
+        // Point deltas pass through untouched (same as on-screen wheel).
+        assert_eq!(wheel_ints(0, -12, 0.0, 0.0), (0, -12));
+        assert_eq!(wheel_ints(3, 0, 9.9, 9.9), (3, 10));
+        // Fixed-point rounds; sub-pixel nudges keep their direction.
+        assert_eq!(wheel_ints(0, 0, 0.0, -2.4), (0, -2));
+        assert_eq!(wheel_ints(0, 0, 0.3, -0.2), (1, -1));
+        assert_eq!(wheel_ints(0, 0, 0.0, 0.0), (0, 0));
     }
 
     #[test]

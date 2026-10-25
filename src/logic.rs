@@ -127,14 +127,19 @@ impl Cooldown {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WheelRoute {
-    /// Plain wheel outside the mirror: leave the event for the Mac app.
+    /// Plain wheel: leave the event alone. Over the mirror, scrcpy scrolls
+    /// the phone natively — that is the reference on-screen wheel behavior;
+    /// elsewhere the Mac app keeps it.
     Pass,
-    /// SHIFT+wheel anywhere, or plain wheel over the mirror: ours.
+    /// SHIFT+wheel: suppress the original. The listener forwards a plain
+    /// copy into the mirror window so it functions exactly like wheeling
+    /// while the mouse is on the screen (or, with no mirror window, falls
+    /// back to accumulated NEXT/PREV adb swipes).
     Consume,
 }
 
-pub fn wheel_route(shift: bool, on_mirror: bool) -> WheelRoute {
-    if shift || on_mirror {
+pub fn wheel_route(shift: bool, _on_mirror: bool) -> WheelRoute {
+    if shift {
         WheelRoute::Consume
     } else {
         WheelRoute::Pass
@@ -204,9 +209,11 @@ mod tests {
 
     #[test]
     fn wheel_route_truth_table() {
+        // SHIFT+wheel is intercepted (and forwarded as an on-screen wheel);
+        // plain wheel always passes through untouched.
         assert_eq!(wheel_route(true, true), WheelRoute::Consume);
         assert_eq!(wheel_route(true, false), WheelRoute::Consume);
-        assert_eq!(wheel_route(false, true), WheelRoute::Consume);
+        assert_eq!(wheel_route(false, true), WheelRoute::Pass);
         assert_eq!(wheel_route(false, false), WheelRoute::Pass);
     }
 }

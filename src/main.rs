@@ -118,12 +118,17 @@ fn run_test() -> i32 {
         pass = pass_str(pass)
     );
 
-    // Mirror routing: SHIFT anywhere + plain wheel on mirror consume; elsewhere passes.
+    // Wheel routing: only SHIFT+wheel is intercepted (forwarded into the
+    // mirror as an on-screen wheel); plain wheel always passes through.
     let pass = logic::wheel_route(true, false) == logic::WheelRoute::Consume
-        && logic::wheel_route(false, true) == logic::WheelRoute::Consume
+        && logic::wheel_route(true, true) == logic::WheelRoute::Consume
+        && logic::wheel_route(false, true) == logic::WheelRoute::Pass
         && logic::wheel_route(false, false) == logic::WheelRoute::Pass;
     ok &= pass;
-    println!("  wheel route shift/mirror/elsewhere [{}]", pass_str(pass));
+    println!(
+        "  wheel route shift-forward/plain-pass [{}]",
+        pass_str(pass)
+    );
 
     println!(
         "SELFTEST {}",
