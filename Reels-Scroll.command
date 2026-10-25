@@ -86,6 +86,22 @@ INVERT = False
 last_fire = 0.0
 shift_held = False
 
+def scrcpy_at(x, y):
+    """True when the Mac cursor (x, y) is over the scrcpy mirror window."""
+    try:
+        from Quartz import CGWindowListCopyWindowInfo, kCGWindowListOptionOnScreenOnly, kCGWindowListExcludeDesktopElements, kCGNullWindowID
+        wins = CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements, kCGNullWindowID)
+        for w in wins:
+            if "scrcpy" not in (w.get("kCGWindowOwnerName") or "").lower():
+                continue
+            b = w.get("kCGWindowBounds") or {}
+            bx, by = float(b.get("X", 0)), float(b.get("Y", 0))
+            if bx <= x <= bx + float(b.get("Width", 0)) and by <= y <= by + float(b.get("Height", 0)):
+                return True
+        return False
+    except Exception:
+        return False
+
 def decide(dx, dy):
     if abs(dx) < 1e-9 and abs(dy) < 1e-9:
         return None
@@ -112,6 +128,9 @@ def selftest():
     vp = (VIDEO_CMD[-3:] == ["tap", "540", "1150"])
     print(f"  video pause/resume tap center [{('PASS' if vp else 'FAIL')}: {' '.join(VIDEO_CMD[-3:])}]", flush=True)
     if not vp: ok = False
+    sf = scrcpy_at(0, 0)
+    print(f"  scrcpy-window detect returns bool [{('PASS' if isinstance(sf, bool) else 'FAIL')}: {sf} at 0,0]", flush=True)
+    if not isinstance(sf, bool): ok = False
     print("SELFTEST " + ("OK - DOWN=NEXT, UP=PREV" if ok else "FAILED"), flush=True)
     return ok
 
@@ -128,6 +147,7 @@ def run_cmd(cmd):
 def on_scroll(x, y, dx, dy):
     global last_fire
     if not shift_held: return
+    if scrcpy_at(x, y): return  # cursor over mirror: scrcpy forwards wheel itself, else double-NEXT
     now = time.time()
     if now - last_fire < COOLDOWN: return
     action = decide(dx, dy)
@@ -158,6 +178,7 @@ def on_click(x, y, button, pressed):
         return
     if not pressed:
         return
+    if scrcpy_at(x, y): return  # cursor over mirror: scrcpy handles click (SHIFT+click = tap there), else double-tap
     try:
         from pynput.mouse import Button
         if button in (Button.middle, Button.right):

@@ -1,15 +1,20 @@
 #!/bin/bash
-# Android-Mouse.command - Desktop. Mac mouse controls Android screen via scrcpy (over WiFi adb).
-#   Left-click = tap | drag = swipe | wheel = scroll | right-click = Back | middle-click = Home
-#   Watch on TV (Smart View) or in the Mac window - clicks land exactly where you click in the window.
+# Android-Mouse.command - Desktop. Mac mouse controls Android + ALL Reels-Scroll features, one launcher.
+#   INSIDE mirror window : click=tap (center=pause) | drag=swipe | wheel=NEXT/PREV | right=Back | middle=Home
+#   ANYWHERE (TV, no window focus): SHIFT+wheel=NEXT/PREV | SHIFT+middle/right-click=VIDEO pause/resume
+#   Listener auto-steps-aside while cursor is over mirror window, so actions never fire twice.
 ADB="/opt/homebrew/bin/adb"
 SCRCPY="/opt/homebrew/bin/scrcpy"
+PY="/opt/homebrew/bin/python3"
 IPFILE="$HOME/Desktop/fb-reels-tv-ip.txt"
+PYFILE="$HOME/Desktop/fb-reels-scroll.py"
+REELS="$HOME/Desktop/Reels-Scroll.command"
 export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
 cd "$HOME" || exit 1
 
 [ -x "$SCRCPY" ] || brew install scrcpy
 [ -x "$ADB" ] || brew install android-platform-tools
+[ -x "$PY" ] || brew install python
 
 pick_serial() {
   local d
@@ -28,13 +33,32 @@ while [ -z "$SERIAL" ]; do
   [ -f "$IPFILE" ] && "$ADB" connect "$(cat "$IPFILE")" >/dev/null 2>&1
   sleep 2; pick_serial
 done
+export ADB_SERIAL="$SERIAL"
 
 echo "=============================================="
-echo " Android MOUSE CONTROL -> $SERIAL"
-echo " Left-click = TAP | drag = swipe | wheel = scroll"
-echo " Right-click = Back | middle-click = Home"
-echo " Close the mirror window (or Ctrl+C here) to stop."
+echo " Android MOUSE + REELS -> $SERIAL"
+echo " INSIDE window : click=TAP | drag=swipe | wheel=NEXT/PREV"
+echo " ANYWHERE      : SHIFT+wheel=NEXT/PREV | SHIFT+mid/right-click=pause"
+echo " Close the mirror window (or Ctrl+C here) to stop both."
 echo "=============================================="
+
+# --- Reels-Scroll features: same SHIFT+wheel / SHIFT+click listener, in background ---
+LISTENER_PID=""
+if [ ! -f "$PYFILE" ] && [ -f "$REELS" ]; then "$REELS" --test >/dev/null 2>&1; fi
+if [ -f "$PYFILE" ] && "$PY" -c "import pynput" 2>/dev/null; then
+  "$PY" "$PYFILE" &
+  LISTENER_PID=$!
+  echo "Reels listener ON (pid $LISTENER_PID) - auto-off while cursor is over the mirror window."
+else
+  echo "Reels listener unavailable (helper/pynput missing) - mirror control still works."
+fi
+cleanup() { [ -n "$LISTENER_PID" ] && kill "$LISTENER_PID" 2>/dev/null; }
+trap cleanup EXIT INT TERM
+
 # --no-audio: keep Reels audio on the TV, not duplicated on the Mac
-exec "$SCRCPY" -s "$SERIAL" --no-audio --stay-awake --max-size 900 \
-  --window-title "Android - click = tap, drag = swipe, wheel = scroll"
+"$SCRCPY" -s "$SERIAL" --no-audio --stay-awake --max-size 900 \
+  --window-title "Android - click=tap, wheel=NEXT/PREV, SHIFT+click=tap"
+RC=$?
+cleanup
+trap - EXIT INT TERM
+exit $RC
