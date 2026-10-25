@@ -162,6 +162,16 @@ Its transparent backing lets the app's own title-bar color show
 through. It sticks to the window as it moves, and most of the title
 bar stays free, so the window is still easy to drag.
 The mirror's main window title is just **ScreenGood**.
+The button stays on the mirror window only — it never attaches to
+other windows of the mirror process, such as its About panel.
+
+The mirror itself also presents as **ScreenGood**: the name beside
+the Apple logo, the Dock icon, and the About panel all use the
+ScreenGood name and logo.
+ScreenGood runs its external mirror tool from a small generated
+helper bundle (`~/Library/Application Support/ScreenGood/ScreenGood
+Mirror.app`, refreshed automatically when the tool updates) to get
+that native identity.
 
 The same window can also be opened from Terminal:
 
@@ -322,7 +332,7 @@ ditto -c -k --sequesterRsrc --keepParent ScreenGood.app ScreenGood-macOS-arm64.z
 Tests and checks (no phone needed):
 
 ```sh
-cargo test                                         # 47 unit tests
+cargo test                                         # 50 unit tests
 cargo clippy --all-targets --locked -- -D warnings # same lint CI runs
 cargo fmt --check
 ./target/release/screengood test  # prints SELFTEST OK - DOWN=NEXT, UP=PREV

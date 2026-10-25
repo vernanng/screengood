@@ -195,8 +195,27 @@ fn bounds_from_dict(
     }
 }
 
+/// Pick the mirror window among one pid's windows: the one carrying
+/// the mirror title (`--window-title`) when titles are readable, else
+/// the largest. Keeps auxiliary windows of the same process (the About
+/// panel) from being mistaken for the mirror.
+fn pick_mirror_bounds(windows: &[(Bounds, String)]) -> Option<Bounds> {
+    let valid = |b: &Bounds| b.2 > 0.0 && b.3 > 0.0;
+    if let Some((bounds, _)) = windows
+        .iter()
+        .find(|(b, title)| valid(b) && title == crate::MIRROR_WINDOW_TITLE)
+    {
+        return Some(*bounds);
+    }
+    windows
+        .iter()
+        .filter(|(b, _)| valid(b))
+        .max_by(|a, b| (a.0 .2 * a.0 .3).total_cmp(&(b.0 .2 * b.0 .3)))
+        .map(|(b, _)| *b)
+}
+
 /// Port of `scrcpy_bounds()`'s window query, with owner pids; empty on
-/// any failure.
+/// any failure. One picked mirror window per owner pid.
 fn query_scrcpy_windows() -> Vec<(Bounds, i32)> {
     let windows = match copy_window_info(
         kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements,
@@ -209,7 +228,7 @@ fn query_scrcpy_windows() -> Vec<(Bounds, i32)> {
     let key_y = CFString::new("Y");
     let key_w = CFString::new("Width");
     let key_h = CFString::new("Height");
-    let mut out = Vec::new();
+    let mut candidates: Vec<(Bounds, i32, String)> = Vec::new();
     for ptr in windows.get_all_values() {
         let dict = match cf_type(ptr).and_then(|t| t.downcast::<CFDictionary>()) {
             Some(d) => d,
@@ -219,9 +238,32 @@ fn query_scrcpy_windows() -> Vec<(Bounds, i32)> {
             continue;
         }
         let pid = dict_value_i32(&dict, unsafe { kCGWindowOwnerPID } as *const c_void);
-        out.push((bounds_from_dict(&dict, &key_x, &key_y, &key_w, &key_h), pid));
+        // Window names of other processes need Screen Recording
+        // permission; empty when unavailable (largest-window fallback).
+        let title =
+            dict_value_string(&dict, unsafe { kCGWindowName } as *const c_void).unwrap_or_default();
+        candidates.push((
+            bounds_from_dict(&dict, &key_x, &key_y, &key_w, &key_h),
+            pid,
+            title,
+        ));
     }
-    out
+    let mut pids: Vec<i32> = Vec::new();
+    for candidate in &candidates {
+        if !pids.contains(&candidate.1) {
+            pids.push(candidate.1);
+        }
+    }
+    pids.iter()
+        .filter_map(|pid| {
+            let mine: Vec<(Bounds, String)> = candidates
+                .iter()
+                .filter(|c| c.1 == *pid)
+                .map(|c| (c.0, c.2.clone()))
+                .collect();
+            pick_mirror_bounds(&mine).map(|bounds| (bounds, *pid))
+        })
+        .collect()
 }
 
 fn query_scrcpy_bounds() -> Vec<Bounds> {
@@ -240,16 +282,24 @@ fn query_window_bounds_for_pid(pid: i32) -> Option<Bounds> {
     let key_y = CFString::new("Y");
     let key_w = CFString::new("Width");
     let key_h = CFString::new("Height");
+    let mut mine: Vec<(Bounds, String)> = Vec::new();
     for ptr in windows.get_all_values() {
         let dict = match cf_type(ptr).and_then(|t| t.downcast::<CFDictionary>()) {
             Some(d) => d,
             None => continue,
         };
         if dict_value_i32(&dict, unsafe { kCGWindowOwnerPID } as *const c_void) == pid {
-            return Some(bounds_from_dict(&dict, &key_x, &key_y, &key_w, &key_h));
+            let title = dict_value_string(&dict, unsafe { kCGWindowName } as *const c_void)
+                .unwrap_or_default();
+            mine.push((
+                bounds_from_dict(&dict, &key_x, &key_y, &key_w, &key_h),
+                title,
+            ));
         }
     }
-    None
+    // Not the frontmost window: when scrcpy's About panel is key, the
+    // Settings button must stay on the mirror window behind it.
+    pick_mirror_bounds(&mine)
 }
 
 /// Fresh scrcpy windows (bounds + owner pid) for the floating Settings
@@ -582,6 +632,29 @@ pub fn spawn(cfg: ListenerConfig) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pick_mirror_bounds_prefers_mirror_title_then_largest() {
+        let about: Bounds = (100.0, 100.0, 520.0, 360.0);
+        let mirror: Bounds = (300.0, 40.0, 380.0, 820.0);
+        // Titled mirror wins even when the About panel is listed first
+        // (frontmost) and even if it were larger.
+        let small_mirror: Bounds = (300.0, 40.0, 200.0, 400.0);
+        let titled = vec![
+            (about, "About".to_string()),
+            (small_mirror, crate::MIRROR_WINDOW_TITLE.to_string()),
+        ];
+        assert_eq!(pick_mirror_bounds(&titled), Some(small_mirror));
+        // No readable titles (no Screen Recording grant): largest wins.
+        let untitled = vec![(about, String::new()), (mirror, String::new())];
+        assert_eq!(pick_mirror_bounds(&untitled), Some(mirror));
+        // Degenerate input.
+        assert_eq!(pick_mirror_bounds(&[]), None);
+        assert_eq!(
+            pick_mirror_bounds(&[((0.0, 0.0, 0.0, 0.0), "x".to_string())]),
+            None
+        );
+    }
 
     #[test]
     fn scrcpy_at_origin_returns_bool_without_panicking() {

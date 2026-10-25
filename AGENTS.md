@@ -63,8 +63,12 @@ docs and code general-purpose — never reintroduce app-specific wording
 ## Code Map
 
 - `src/main.rs` — CLI + app flow: mirror profiles, `MIRROR_WINDOW_TITLE`
-  (short project-name title), spawns the floating title bar beside
-  scrcpy, permission
+  (short project-name title), `ensure_mirror_app` (generated
+  `ScreenGood Mirror.app` bundle in `support_dir()` wrapping a copy of
+  the scrcpy binary — file name stays `scrcpy` for window detection —
+  so the menu-bar name, Dock icon, and About panel present as
+  ScreenGood; `scrcpy_server_path` feeds `SCRCPY_SERVER_PATH`), spawns
+  the floating title bar beside scrcpy, permission
   check-then-request (preflight runs before any phone/mirror work;
   missing-only prompt via `panes_for_missing`, silent re-check at
   spawn), `kill_previous_instances` (single instance by

@@ -441,6 +441,115 @@ fn spawn_title_bar() -> Option<std::process::Child> {
     }
 }
 
+fn mirror_plist_body(version: &str) -> String {
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleExecutable</key><string>scrcpy</string>
+    <key>CFBundleIconFile</key><string>AppIcon</string>
+    <key>CFBundleIdentifier</key><string>com.screengood.mirror</string>
+    <key>CFBundleName</key><string>ScreenGood</string>
+    <key>CFBundleDisplayName</key><string>ScreenGood</string>
+    <key>CFBundlePackageType</key><string>APPL</string>
+    <key>CFBundleShortVersionString</key><string>{version}</string>
+    <key>LSMinimumSystemVersion</key><string>11.0</string>
+    <key>NSHighResolutionCapable</key><true/>
+    <key>NSPrincipalClass</key><string>NSApplication</string>
+</dict>
+</plist>
+"#
+    )
+}
+
+/// `scrcpy-server` beside a scrcpy binary: `<prefix>/share/scrcpy/
+/// scrcpy-server` (resolving the Homebrew bin symlink first), when it
+/// exists. Passed as `SCRCPY_SERVER_PATH` so the bundled copy finds
+/// the server even when its build has no absolute path compiled in.
+fn scrcpy_server_path(scrcpy_bin: &Path) -> Option<PathBuf> {
+    let real = std::fs::canonicalize(scrcpy_bin).ok()?;
+    let candidate = real.parent()?.parent()?.join("share/scrcpy/scrcpy-server");
+    candidate.exists().then_some(candidate)
+}
+
+/// Identity of the scrcpy source binary (path, size, mtime) plus this
+/// app's version; the mirror bundle rebuilds when any part changes
+/// (a Homebrew scrcpy upgrade moves the Cellar path).
+fn mirror_bundle_stamp(src: &Path) -> Option<String> {
+    let meta = std::fs::metadata(src).ok()?;
+    let mtime = meta
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs();
+    Some(format!(
+        "{}|{}|{}|{}",
+        src.display(),
+        meta.len(),
+        mtime,
+        env!("CARGO_PKG_VERSION")
+    ))
+}
+
+/// Generated helper bundle wrapping a copy of the external scrcpy
+/// binary, so the mirror presents as ScreenGood — app-menu name
+/// beside the Apple logo, Dock icon, and About panel all come from
+/// this bundle instead of "scrcpy" with a generic icon. The copy
+/// keeps the file name `scrcpy`, so window detection by process name
+/// is unchanged. Lives under `support_dir()`; rebuilt when the
+/// Homebrew binary changes. `None` → caller runs scrcpy directly.
+fn ensure_mirror_app(scrcpy_bin: &Path) -> Option<PathBuf> {
+    use std::os::unix::fs::PermissionsExt;
+    let src = std::fs::canonicalize(scrcpy_bin).ok()?;
+    let app = support_dir().join("ScreenGood Mirror.app");
+    let contents = app.join("Contents");
+    let exe = contents.join("MacOS").join("scrcpy");
+    let stamp_path = contents.join("Resources").join("screengood-stamp.txt");
+    let stamp = mirror_bundle_stamp(&src)?;
+    if exe.exists() && std::fs::read_to_string(&stamp_path).ok().as_deref() == Some(&stamp) {
+        return Some(exe);
+    }
+    let macos = contents.join("MacOS");
+    let resources = contents.join("Resources");
+    std::fs::create_dir_all(&macos).ok()?;
+    std::fs::create_dir_all(&resources).ok()?;
+    // Copy via temp + rename so a still-running previous mirror is
+    // never truncated under its own executable.
+    let tmp = macos.join(format!(".scrcpy-{}", std::process::id()));
+    std::fs::copy(&src, &tmp).ok()?;
+    let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755));
+    if std::fs::rename(&tmp, &exe).is_err() {
+        let _ = std::fs::remove_file(&tmp);
+        return None;
+    }
+    std::fs::write(
+        resources.join("AppIcon.icns"),
+        include_bytes!("../assets/AppIcon.icns"),
+    )
+    .ok()?;
+    std::fs::write(
+        contents.join("Info.plist"),
+        mirror_plist_body(env!("CARGO_PKG_VERSION")),
+    )
+    .ok()?;
+    std::fs::write(&stamp_path, &stamp).ok()?;
+    let signed = Command::new("/usr/bin/codesign")
+        .args(["--force", "--deep", "--sign", "-"])
+        .arg(&app)
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if !signed {
+        // Leave no stamp: next launch retries the rebuild instead of
+        // trusting an unsigned bundle.
+        let _ = std::fs::remove_file(&stamp_path);
+        return None;
+    }
+    Some(exe)
+}
+
 fn run_mirror_mode() -> i32 {
     kill_previous_instances();
     // Check BEFORE touching the phone or opening the mirror: a missing
@@ -504,9 +613,18 @@ fn run_mirror_mode() -> i32 {
     println!(" Profile: {profile}");
     println!("==============================================");
     let current_path = std::env::var("PATH").ok();
-    let mut scrcpy_child = match Command::new(&tools.scrcpy_bin)
-        // scrcpy spawns `adb` by name (or $ADB); Finder GUI PATH lacks
-        // Homebrew, so hand it the absolute adb path explicitly.
+    // Run scrcpy from the generated ScreenGood helper bundle when it
+    // can be assembled, so the menu bar, Dock, and About panel say
+    // ScreenGood (with the app icon); else run the Homebrew binary.
+    let scrcpy_exe =
+        ensure_mirror_app(&tools.scrcpy_bin).unwrap_or_else(|| tools.scrcpy_bin.clone());
+    if scrcpy_exe != tools.scrcpy_bin {
+        println!("Mirror app: {}", scrcpy_exe.display());
+    }
+    let mut scrcpy_cmd = Command::new(&scrcpy_exe);
+    // scrcpy spawns `adb` by name (or $ADB); Finder GUI PATH lacks
+    // Homebrew, so hand it the absolute adb path explicitly.
+    scrcpy_cmd
         .env("ADB", &tools.adb_bin)
         .env(
             "PATH",
@@ -514,9 +632,11 @@ fn run_mirror_mode() -> i32 {
         )
         .args(["-s", &serial, "--stay-awake"])
         .args(&args)
-        .args(["--window-title", MIRROR_WINDOW_TITLE])
-        .spawn()
-    {
+        .args(["--window-title", MIRROR_WINDOW_TITLE]);
+    if let Some(server) = scrcpy_server_path(&tools.scrcpy_bin) {
+        scrcpy_cmd.env("SCRCPY_SERVER_PATH", server);
+    }
+    let mut scrcpy_child = match scrcpy_cmd.spawn() {
         Ok(child) => child,
         Err(e) => {
             eprintln!("scrcpy failed to start: {e}");
@@ -748,15 +868,20 @@ fn codesign_args(mode: &SignMode, app_str: &str) -> Vec<String> {
 
 const SIGN_CN: &str = "ScreenGood Local Signing";
 
-/// All signing material lives under
-/// `~/Library/Application Support/ScreenGood/`: a dedicated keychain file
-/// (never the login keychain), its password file (0600), and the public
-/// certificate (kept so trust can be removed later).
-fn signing_dir() -> PathBuf {
+/// `~/Library/Application Support/ScreenGood/` — signing material and
+/// the generated mirror helper bundle live here.
+fn support_dir() -> PathBuf {
     std::env::var_os("HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."))
         .join("Library/Application Support/ScreenGood")
+}
+
+/// All signing material lives under `support_dir()`: a dedicated
+/// keychain file (never the login keychain), its password file (0600),
+/// and the public certificate (kept so trust can be removed later).
+fn signing_dir() -> PathBuf {
+    support_dir()
 }
 
 struct SigningPaths {
@@ -1176,6 +1301,42 @@ mod tests {
             child_env_path(Path::new("adb"), Some("/usr/bin")),
             "/usr/bin"
         );
+    }
+
+    #[test]
+    fn mirror_plist_presents_as_screengood_over_scrcpy_executable() {
+        let body = mirror_plist_body("9.9.9");
+        // Menu bar / About identity comes from the bundle name + icon;
+        // the executable file stays "scrcpy" for window detection.
+        assert!(body.contains("<key>CFBundleName</key><string>ScreenGood</string>"));
+        assert!(body.contains("<key>CFBundleDisplayName</key><string>ScreenGood</string>"));
+        assert!(body.contains("<key>CFBundleIconFile</key><string>AppIcon</string>"));
+        assert!(body.contains("<key>CFBundleExecutable</key><string>scrcpy</string>"));
+        assert!(body.contains("<key>CFBundleShortVersionString</key><string>9.9.9</string>"));
+    }
+
+    #[test]
+    fn scrcpy_server_path_finds_sibling_share_dir() {
+        let root = std::env::temp_dir().join(format!(
+            "screengood-server-path-test-{}",
+            std::process::id()
+        ));
+        let bin = root.join("bin");
+        let share = root.join("share/scrcpy");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::create_dir_all(&share).unwrap();
+        let exe = bin.join("scrcpy");
+        std::fs::write(&exe, b"fake").unwrap();
+        // No server file yet.
+        assert_eq!(scrcpy_server_path(&exe), None);
+        let server = share.join("scrcpy-server");
+        std::fs::write(&server, b"fake").unwrap();
+        // The function canonicalizes (/var -> /private/var on macOS).
+        assert_eq!(
+            scrcpy_server_path(&exe),
+            Some(std::fs::canonicalize(&server).unwrap())
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

@@ -4,8 +4,9 @@
 //! lives here so `title_bar` only deals in higher-level calls.
 //! Pointers returned by `windows` are retained (+1) for the caller.
 
+use core_foundation::base::TCFType;
 use core_foundation::runloop::kCFRunLoopCommonModes;
-use core_foundation::string::CFStringRef;
+use core_foundation::string::{CFString, CFStringRef};
 use objc2_foundation::{ns_string, NSString};
 use std::ffi::c_void;
 
@@ -145,6 +146,16 @@ fn size(element: ElementRef) -> Option<(f64, f64)> {
     let ok = unsafe { AXValueGetValue(value, 2, &mut size as *mut AxSize as *mut c_void) };
     release_ptr(value);
     (ok != 0).then_some((size.width, size.height))
+}
+
+/// Window title (`AXTitle`), when readable. Distinguishes the mirror
+/// window from auxiliary windows of the same app (its About panel).
+pub fn title(element: ElementRef) -> Option<String> {
+    let value = copy_attribute(element, ns_string!("AXTitle"))?;
+    // `copy_attribute` hands back a +1 CFString; the create rule takes
+    // ownership of that retain.
+    let text = unsafe { CFString::wrap_under_create_rule(value as CFStringRef) };
+    Some(text.to_string())
 }
 
 /// `(x, y, width, height)` in global top-left coordinates.

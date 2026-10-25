@@ -315,27 +315,35 @@ impl Delegate {
         println!("Title bar tracking: Accessibility move/resize events");
     }
 
-    /// Track the largest current AX window of the mirror app (its main
-    /// window), returning its bounds when readable.
+    /// Track the mirror's own AX window — the one carrying the mirror
+    /// title when readable, else the largest — so auxiliary windows of
+    /// the same app (its About panel) never steal the button.
+    /// Returns its bounds when readable.
     fn register_largest_ax_window(&self) -> Option<Bounds> {
         let app = self.ivars().ax_app.get() as AxElementRef;
         if app.is_null() {
             return None;
         }
         let windows = ax::windows(app);
-        let mut best: Option<(AxElementRef, Bounds)> = None;
+        let mut best_titled: Option<(AxElementRef, Bounds)> = None;
+        let mut best_any: Option<(AxElementRef, Bounds)> = None;
         for &window in &windows {
             if let Some(bounds) = ax::bounds(window) {
-                let replace = match best {
+                let larger = |slot: &Option<(AxElementRef, Bounds)>| match slot {
                     None => true,
                     Some((_, current)) => bounds.2 * bounds.3 > current.2 * current.3,
                 };
-                if replace {
-                    best = Some((window, bounds));
+                if ax::title(window).as_deref() == Some(crate::MIRROR_WINDOW_TITLE)
+                    && larger(&best_titled)
+                {
+                    best_titled = Some((window, bounds));
+                }
+                if larger(&best_any) {
+                    best_any = Some((window, bounds));
                 }
             }
         }
-        let picked = best.map(|(window, bounds)| {
+        let picked = best_titled.or(best_any).map(|(window, bounds)| {
             // register_ax_window retains the window it stores; every
             // element here then drops the +1 from ax_windows.
             self.register_ax_window(window);
