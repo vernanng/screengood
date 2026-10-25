@@ -12,10 +12,11 @@ Double-click a launcher (or run it from Terminal):
   the phone screen shows on the Mac and mouse click = tap
   (`--mirror` is an explicit alias for this default). The mirror profile is
   picked by transport (cable is preferred whenever present): **USB =
-  near-zero delay** — quality traded down on purpose: 414×900 H.264 at
-  8 Mbps, fps uncapped, video buffer 0, raw audio with a 30 ms buffer
-  (small frames are the fastest the S25 FE can encode and the Mac can
-  decode; sustained full frame rate with headroom to spare).
+  near-zero delay** — 664×1440 H.265 at 12 Mbps, 60 fps cap, video
+  buffer 0, raw audio with a 30 ms buffer. On the S25 FE the hardware
+  HEVC encoder measured steadier than H.264 at this size and up
+  (59–61 fps sustained even while a second encode was running), and the
+  smaller-than-native frame keeps encode/decode time near the floor.
   **WiFi = the previous "100 buffer video audio" smooth profile** —
   414×900 with 100 ms video/audio buffers, kept for jitter absorption. From Terminal,
   `./Android-Mouse.command --pad` uses the no-screen TV mode instead: a blank

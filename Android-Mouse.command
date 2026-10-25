@@ -338,9 +338,9 @@ else  # default, incl. explicit --mirror: scrcpy mirror, phone screen on the Mac
     *:*|*_tcp)  # WiFi transport: proven smooth profile, buffers absorb jitter
       PROFILE="WiFi smooth: 414x900 H.264 | buffer video/audio 100ms"
       SCRCPY_PROFILE=(--max-size 900 --video-buffer=100 --audio-buffer=100) ;;
-    *)          # USB cable: PERFECT near-zero delay - quality traded down on purpose (small frames encode/decode fastest, fps uncapped)
-      PROFILE="USB near-zero: 414x900 H.264 8M fps-uncapped | video buffer 0 | raw audio buffer 30ms"
-      SCRCPY_PROFILE=(--max-size 900 --video-codec=h264 --video-bit-rate=8M --video-buffer=0 --audio-codec=raw --audio-buffer=30 --render-driver=metal) ;;
+    *)          # USB cable: near-zero delay, quality bumped a lil bit - Exynos HEVC hw encoder held 59-61fps at this size even dual-encoding
+      PROFILE="USB near-zero: 664x1440 H.265 12M 60fps | video buffer 0 | raw audio buffer 30ms"
+      SCRCPY_PROFILE=(--max-size 1440 --video-codec=h265 --video-bit-rate=12M --max-fps=60 --video-buffer=0 --audio-codec=raw --audio-buffer=30 --render-driver=metal) ;;
   esac
   echo "=============================================="
   echo " MIRROR MODE (scrcpy): PHONE SCREEN on Mac -> $SERIAL"
