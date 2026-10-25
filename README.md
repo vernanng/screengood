@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/icon-1024.png" width="160" height="160" alt="ScreenGood logo — Android holding a screen">
+</p>
+
 # ANDROID SCREEN MIRROR INSIDE MAC WITH CONTROL
 
 **Wi-Fi or USB-C.**
