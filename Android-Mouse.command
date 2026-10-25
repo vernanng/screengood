@@ -337,8 +337,9 @@ else  # default, incl. explicit --mirror: scrcpy mirror, phone screen on the Mac
   echo " MIRROR MODE (scrcpy): PHONE SCREEN on Mac -> $SERIAL"
   echo " click=TAP | drag=swipe | right-click=Back (inside mirror)"
   echo " ANYWHERE: light SHIFT+wheel=NEXT/PREV | SHIFT+mid/right=pause"
+  echo " Buffer: video 100ms | audio 100ms (smooth, +100ms delay)"
   echo "=============================================="
-  "$SCRCPY" -s "$SERIAL" --stay-awake --max-size 900 \
+  "$SCRCPY" -s "$SERIAL" --stay-awake --max-size 900 --video-buffer=100 --audio-buffer=100 \
     --window-title "Android - click=tap, light SHIFT+wheel=NEXT/PREV, SHIFT+click=tap"
   RC=$?
 fi

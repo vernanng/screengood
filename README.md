@@ -10,7 +10,9 @@ Double-click a launcher (or run it from Terminal):
 
 - `Android-Mouse.command` — main launcher. **Double-click = scrcpy mirror:**
   the phone screen shows on the Mac and mouse click = tap
-  (`--mirror` is an explicit alias for this default). From Terminal,
+  (`--mirror` is an explicit alias for this default). The mirror runs with a
+  100 ms video + 100 ms audio buffer ("100 buffer video audio"): smoother
+  playback and no crackle, at the cost of ~100 ms extra delay. From Terminal,
   `./Android-Mouse.command --pad` uses the no-screen TV mode instead: a blank
   phone-shaped pad window, watch the TV, no scrcpy lag, sound from the TV.
 - `Reels-Scroll.command` — listener only, no pad/mirror.
