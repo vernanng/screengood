@@ -23,15 +23,10 @@ docs and code general-purpose — never reintroduce app-specific wording
   target. The free no-Gatekeeper install path: `cargo install --git
   https://github.com/vernanng/screengood --locked` then `screengood
   install` (locally built apps carry no download quarantine).
-- Release packages: ZIP via `ditto -c -k --sequesterRsrc --keepParent`
-  (the current release asset; v0.2.1 intentionally ships no DMG, removed
-  with `gh release delete-asset`). The DMG recipe (`hdiutil create
-  -volname ScreenGood -srcfolder <stage with app + READ-ME-FIRST +
-  /Applications symlink> -format UDZO`, still built as a CI artifact for
-  drag-to-Applications distribution; verify with `hdiutil verify` and a
-  mount + `codesign --verify` before any upload). Publish/update with
-  `gh release` on `vernanng/screengood`, and keep the release notes'
-  install block, asset table, and SHA-256s accurate.
+- Release packages: native macOS app as a ZIP via `ditto -c -k
+  --sequesterRsrc --keepParent` (the only release asset).
+  Publish/update with `gh release` on `vernanng/screengood`, and keep the
+  release notes' install block, asset table, and SHA-256s accurate.
 - `./target/release/screengood setup-signing` — one-time, user-run:
   creates the free `ScreenGood Local Signing` identity in a dedicated
   keychain file under `~/Library/Application Support/ScreenGood/` (login
@@ -50,7 +45,7 @@ docs and code general-purpose — never reintroduce app-specific wording
   release build → selftest → `make-app` + codesign verify → bundle
   version check (plist vs `Cargo.toml`) → Cargo-install smoke test
   (`cargo install --path .`, `install` to a temp dir, verify + selftest)
-  → zip + DMG artifacts. Keep local gates identical.
+  → zip artifact. Keep local gates identical.
 - Pushing a `v*` tag additionally runs the `release` job (10 min
   timeout, `contents: write`): it re-verifies the artifacts, stages
   versioned filenames, and publishes the GitHub release live with
@@ -61,14 +56,16 @@ docs and code general-purpose — never reintroduce app-specific wording
   change produces a new ad-hoc code hash, which invalidates TCC grants
   (see invariants) — bundle changes so users only re-grant once per
   release, and say so in release notes.
-- CI artifact ZIPs/DMGs are ad-hoc-signed CI builds for smoke-testing
+- CI artifact ZIPs are ad-hoc-signed CI builds for smoke-testing
   the packaging path; user-facing downloads are the GitHub Release
   assets.
 
 ## Code Map
 
 - `src/main.rs` — CLI + app flow: mirror profiles, permission
-  check-then-request, `kill_previous_instances` (single instance by
+  check-then-request (preflight runs before any phone/mirror work;
+  missing-only prompt via `panes_for_missing`, silent re-check at
+  spawn), `kill_previous_instances` (single instance by
   replacement), `child_env_path`, `redirect_output_to_log_if_gui`,
   `assemble_app`/`sign_app` shared bundle assembly (`make_app` with file
   icon, `install_app` with embedded icon, `resolve_sign_mode` picking
@@ -104,8 +101,9 @@ docs and code general-purpose — never reintroduce app-specific wording
   cooldown, swipe). `SWIPE_DUR_MS = 400` is user-tuned; change only on
   explicit request.
 - **Check before asking for permissions.** Preflight Accessibility and
-  Input Monitoring separately on every launch; request/open a Settings
-  pane only for one that is missing; never re-request a granted one.
+  Input Monitoring separately on every launch, before any phone or
+  mirror work; request/open a Settings pane only for one that is
+  missing; never re-request a granted one.
 - **Signing is local: ad-hoc by default, stable after `setup-signing`.**
   With ad-hoc signing TCC keys grants to the build's code hash: after a
   rebuild that changes code, Settings can show "on" while preflight still

@@ -60,8 +60,8 @@ just double-click the app from then on.
 **ZIP download (no Rust needed):**
 
 Grab the latest build from
-[Releases](https://github.com/vernanng/screengood/releases) (currently a
-`.zip` of the app — the DMG disk image was removed):
+[Releases](https://github.com/vernanng/screengood/releases) (a `.zip` of the
+native macOS app):
 
 1. Download `ScreenGood-vX.Y.Z-macOS-arm64.zip`, unzip it, and move
    **ScreenGood.app** to `/Applications`.
@@ -180,7 +180,9 @@ The wheel listener needs ScreenGood allowed in both of these:
 - **Settings → Privacy & Security → Input Monitoring**
 - **Settings → Privacy & Security → Accessibility**
 
-Every launch **checks first**. The app silently preflights both permissions:
+Every launch **checks first — before the phone connects**. The app
+silently preflights both permissions, so a missing grant prompts
+immediately instead of mid-launch:
 
 - **Both granted** → no dialog, no Settings window, the mirror just opens.
   Ordinary launches never ask again.
@@ -255,19 +257,10 @@ Terminal alternative (no app bundle):
 ./target/release/screengood            # mirror mode is the default
 ```
 
-Package files the same way CI does. The release currently ships the
-ZIP only; the DMG recipe is kept for drag-to-Applications distribution:
+Package the native macOS app the same way CI does (ZIP only):
 
 ```sh
-# zip
 ditto -c -k --sequesterRsrc --keepParent ScreenGood.app ScreenGood-macOS-arm64.zip
-
-# dmg (drag-to-Applications)
-mkdir -p dmg-stage
-ditto ScreenGood.app dmg-stage/ScreenGood.app
-cp assets/READ-ME-FIRST.txt dmg-stage/READ-ME-FIRST.txt
-ln -s /Applications dmg-stage/Applications
-hdiutil create -volname "ScreenGood" -srcfolder dmg-stage -ov -format UDZO ScreenGood-macOS-arm64.dmg
 ```
 
 ## Commands
@@ -287,7 +280,7 @@ hdiutil create -volname "ScreenGood" -srcfolder dmg-stage -ov -format UDZO Scree
 Tests and checks (no phone needed):
 
 ```sh
-cargo test                                         # 35 unit tests
+cargo test                                         # 36 unit tests
 cargo clippy --all-targets --locked -- -D warnings # same lint CI runs
 cargo fmt --check
 ./target/release/screengood test  # prints SELFTEST OK - DOWN=NEXT, UP=PREV

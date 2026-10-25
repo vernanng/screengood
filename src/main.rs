@@ -222,9 +222,10 @@ fn missing_permission_names(perms: listener::Perms) -> String {
     names.join(" + ")
 }
 
-/// Open Settings panes only for permissions the preflight found missing.
-/// Accessibility first, Input Monitoring last so it stays on screen.
-fn open_permission_panes(perms: listener::Perms) {
+/// Settings panes to open for a preflight result: one per missing
+/// permission, none when all granted. Split out so the missing-only
+/// mapping is unit-testable.
+fn panes_for_missing(perms: listener::Perms) -> Vec<&'static str> {
     let mut panes = Vec::new();
     if !perms.accessibility {
         panes.push("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility");
@@ -232,17 +233,25 @@ fn open_permission_panes(perms: listener::Perms) {
     if !perms.input_monitoring {
         panes.push("x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent");
     }
-    for pane in panes {
+    panes
+}
+
+/// Open Settings panes only for permissions the preflight found missing.
+/// Accessibility first, Input Monitoring last so it stays on screen.
+fn open_permission_panes(perms: listener::Perms) {
+    for pane in panes_for_missing(perms) {
         let _ = Command::new("open").arg(pane).status();
         std::thread::sleep(std::time::Duration::from_secs(1));
     }
 }
 
 /// Start the SHIFT+wheel listener in the background if permissions allow;
-/// the mirror keeps working without it.
+/// the mirror keeps working without it. Silent apart from logging: the
+/// launch-time preflight in `run_mirror_mode` already requested and opened
+/// panes for anything missing, so nothing is ever re-requested here.
 fn spawn_listener_if_allowed(phone: &discover::Phone) {
-    // Check first, silently. Only a permission the preflight finds
-    // missing is ever requested or gets a Settings pane opened.
+    // Re-check: the user may have toggled a grant on while the phone
+    // was connecting.
     let perms = listener::check_permissions();
     println!(
         "Permissions preflight: Accessibility={} InputMonitoring={}",
@@ -255,13 +264,9 @@ fn spawn_listener_if_allowed(phone: &discover::Phone) {
             probe: false,
         });
     } else {
-        println!("macOS blocked the SHIFT+wheel listener. Mirror still works.");
         println!(
-            "ScreenGood registered itself under Settings > Privacy for: {}. Switch it ON there, then reopen.",
-            missing_permission_names(perms)
+            "SHIFT+wheel listener still blocked; mirror continues without it (prompted above)."
         );
-        listener::request_permissions(perms);
-        open_permission_panes(perms);
     }
 }
 
@@ -288,8 +293,8 @@ fn run_listener_mode(probe: bool) -> i32 {
         " SHIFT + wheel DOWN = NEXT | UP = PREV | SHIFT + middle/right-click = VIDEO pause/resume"
     );
     println!("==============================================");
-    let phone = discover::connect_phone(&tools);
-    println!("\nPhone OK ({}).\n", phone.adb.serial);
+    // Check BEFORE touching the phone: a missing grant prompts up front
+    // instead of after connecting.
     let perms = listener::check_permissions();
     println!(
         "Permissions preflight: Accessibility={} InputMonitoring={}",
@@ -305,6 +310,8 @@ fn run_listener_mode(probe: bool) -> i32 {
         open_permission_panes(perms);
         return 1;
     }
+    let phone = discover::connect_phone(&tools);
+    println!("\nPhone OK ({}).\n", phone.adb.serial);
     println!("Permission OK. Hold SHIFT + turn wheel. Ctrl+C to stop.");
     listener::run(listener::ListenerConfig {
         adb: phone.adb,
@@ -376,6 +383,25 @@ fn child_env_path(adb_bin: &Path, existing: Option<&str>) -> String {
 
 fn run_mirror_mode() -> i32 {
     kill_previous_instances();
+    // Check BEFORE touching the phone or opening the mirror: a missing
+    // grant prompts (dialog + Settings pane) up front instead of mid-launch.
+    // The mirror itself still launches; only the wheel listener needs these.
+    {
+        let perms = listener::check_permissions();
+        println!(
+            "Permissions preflight: Accessibility={} InputMonitoring={}",
+            perms.accessibility, perms.input_monitoring
+        );
+        if !perms.all_granted() {
+            println!("macOS blocked the SHIFT+wheel listener. Mirror still works.");
+            println!(
+                "ScreenGood registered itself under Settings > Privacy for: {}. Switch it ON there, then reopen.",
+                missing_permission_names(perms)
+            );
+            listener::request_permissions(perms);
+            open_permission_panes(perms);
+        }
+    }
     let tools = discover::resolve_tools();
     ensure_tool(&tools.adb_bin, "android-platform-tools");
     ensure_tool(&tools.scrcpy_bin, "scrcpy");
@@ -1018,6 +1044,40 @@ mod tests {
             }),
             ""
         );
+    }
+
+    #[test]
+    fn panes_for_missing_opens_only_ungranted_panes() {
+        use crate::listener::Perms;
+        assert_eq!(
+            panes_for_missing(Perms {
+                accessibility: false,
+                input_monitoring: false
+            }),
+            vec![
+                "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
+                "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent",
+            ]
+        );
+        assert_eq!(
+            panes_for_missing(Perms {
+                accessibility: false,
+                input_monitoring: true
+            }),
+            vec!["x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"]
+        );
+        assert_eq!(
+            panes_for_missing(Perms {
+                accessibility: true,
+                input_monitoring: false
+            }),
+            vec!["x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent"]
+        );
+        assert!(panes_for_missing(Perms {
+            accessibility: true,
+            input_monitoring: true
+        })
+        .is_empty());
     }
 
     #[test]
