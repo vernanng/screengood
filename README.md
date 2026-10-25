@@ -83,27 +83,3 @@ python3 fb-reels-pad.py --test
   scrcpy is misdetected; the listener steps aside there on purpose.
 - **Two `adb devices` entries for one phone** (IP + mDNS) is normal; the
   launchers pin one serial (`ADB_SERIAL`) for every command.
-
-## Decisions
-
-Status: **Draft** — decision interview in progress (2026-10-25). Nothing here
-is Final until the owner explicitly accepts it. This record lives in the
-README because it is the repository's only tracked document.
-
-### Settled
-
-- **Interview topic:** decide whether this tool is done at the committed state
-  (`80904d1`, review fixes landed) or has a next stage. Chosen over grilling a
-  different specific decision, or only where project decisions should live.
-- **Done vs. next stage:** done, conditional on one live run. There is no next
-  stage. Rationale: the tool already does its one job (this Mac, this phone,
-  this TV); the only unexercised surface after the fixes is a full live
-  launch, which `--test` cannot cover. If the live run exposes a bug, that
-  bug — and nothing else — becomes the remaining work. Rejected: declaring
-  done on `--test` evidence alone, and opening a next stage.
-
-### Unresolved
-
-- [ ] Exactly what the live run must cover to count (current question).
-- [ ] The done-means checklist, and the owner's explicit acceptance of the
-      scope contract (this section) once the checklist is fixed.
