@@ -9,11 +9,10 @@ docs and code general-purpose — never reintroduce app-specific wording
 
 ## Commands
 
-- `cargo test` — 28 unit tests; no phone needed. Run after any change.
-- `cargo clippy -- -D warnings` and `cargo fmt --check` — both must pass
-  (toolchain pinned in `rust-toolchain.toml`: stable + rustfmt + clippy).
-- `cargo build --release` — build; `./target/release/screengood test` must
-  print `SELFTEST OK - DOWN=NEXT, UP=PREV`.
+- `cargo test --locked` — run the full test suite
+- `cargo clippy --all-targets --locked -- -D warnings` — run the lint task
+- `cargo fmt --check` — run the format task
+- `cargo build --release --locked` — build the project
 - `./target/release/screengood make-app` — assemble + ad-hoc sign
   `ScreenGood.app` (identifier `com.screengood.app`, icon from `assets/`).
 - Install: `ditto ScreenGood.app /Applications/ScreenGood.app` (replace
