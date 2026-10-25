@@ -23,20 +23,32 @@ into precise up/down phone swipes over
 same inside any app. Tuned on a Samsung S25 FE, including while the same
 phone is also mirrored to an external monitor.
 
+**At a glance:** Apple Silicon Mac (M-series), macOS 13+ · Android phone
+with USB debugging or Wireless debugging · [Homebrew](https://brew.sh)
+(only so the app can auto-install `adb` and `scrcpy` if missing).
+
+Contents: [Download](#download) · [Quick start](#quick-start) ·
+[Wi-Fi or USB-C](#wi-fi-or-usb-c) · [Controls](#controls) ·
+[One-time setup](#one-time-setup) · [Build from source](#build-from-source) ·
+[Commands](#commands) · [How it works](#how-it-works) ·
+[Troubleshooting](#troubleshooting) · [Uninstall](#uninstall)
+
 ## Download
 
 Grab the latest build from
-[Releases](https://github.com/vernanng/screengood/releases)
-(Apple Silicon, macOS 13 or newer):
+[Releases](https://github.com/vernanng/screengood/releases):
 
-1. Download `ScreenGood-vX.Y.Z-macOS-arm64.zip` and unzip it.
-2. Move `ScreenGood.app` to `/Applications`.
-3. First launch only: **right-click the app → Open** (the build is ad-hoc
-   signed, not notarized).
+**DMG (recommended):**
+
+1. Download `ScreenGood-vX.Y.Z-macOS-arm64.dmg` and open it.
+2. Drag **ScreenGood** onto the **Applications** link in the DMG window.
+3. First launch only: **right-click the app in `/Applications` → Open**
+   (the build is ad-hoc signed, not notarized).
 4. Do the [one-time setup](#one-time-setup) below, then just double-click
    the app from then on.
 
-Building from source instead? See
+A plain `.zip` of the same app is attached to each release as an
+alternative. Building from source instead? See
 [Build from source](#build-from-source).
 
 ## Quick start
@@ -168,10 +180,17 @@ Terminal alternative (no app bundle):
 ./target/release/screengood            # mirror mode is the default
 ```
 
-Package a release zip the same way the GitHub release is made:
+Package release files the same way CI and the GitHub release do:
 
 ```sh
+# zip
 ditto -c -k --sequesterRsrc --keepParent ScreenGood.app ScreenGood-macOS-arm64.zip
+
+# dmg (drag-to-Applications)
+mkdir -p dmg-stage
+ditto ScreenGood.app dmg-stage/ScreenGood.app
+ln -s /Applications dmg-stage/Applications
+hdiutil create -volname "ScreenGood" -srcfolder dmg-stage -ov -format UDZO ScreenGood-macOS-arm64.dmg
 ```
 
 ## Commands
@@ -278,4 +297,20 @@ misdetected — bring the mirror to the front and try again.
 An IP entry plus an mDNS (`_tcp`) entry for one phone is normal. The app
 pins one serial for every `adb` command, so input cannot split across
 transports.
+
+## Uninstall
+
+1. Delete `/Applications/ScreenGood.app`.
+2. Optionally remove its permission entries and local files:
+
+   ```sh
+   tccutil reset Accessibility com.screengood.app
+   tccutil reset ListenEvent com.screengood.app
+   rm -f ~/Library/Logs/ScreenGood.log
+   ```
+
+3. From a source checkout, `phone-ip.txt`, `ScreenGood.app`, and `target/`
+   in the project folder can also be deleted. `adb`/`scrcpy` themselves
+   are Homebrew packages — remove with `brew uninstall scrcpy
+   android-platform-tools` only if nothing else needs them.
 
