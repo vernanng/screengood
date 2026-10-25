@@ -165,15 +165,15 @@ mod tests {
     }
 
     #[test]
-    fn production_swipe_duration_is_470() {
-        assert_eq!(crate::logic::SWIPE_DUR_MS, 470);
+    fn production_swipe_duration_is_700() {
+        assert_eq!(crate::logic::SWIPE_DUR_MS, 700);
         let adb = Adb::new(PathBuf::from("adb"), "FAKE:1".to_string());
         let cmd = adb.swipe_action_cmd(
             crate::logic::Geometry::default(),
             crate::logic::Action::Next,
             crate::logic::SWIPE_DUR_MS,
         );
-        assert_eq!(cmd.last().map(String::as_str), Some("470"));
+        assert_eq!(cmd.last().map(String::as_str), Some("700"));
     }
 
     #[test]
