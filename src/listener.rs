@@ -4,7 +4,9 @@
 //! state comes from each event's flags, so no separate keyboard listener.
 
 use crate::adb::Adb;
-use crate::logic::{wheel_route, Action, Cooldown, Geometry, PixelAccumulator, WheelRoute};
+use crate::logic::{
+    wheel_route, Action, Cooldown, Geometry, PixelAccumulator, WheelRoute, PIXEL_THRESHOLD,
+};
 use core_foundation::base::{CFType, CFTypeRef, TCFType};
 use core_foundation::dictionary::CFDictionary;
 use core_foundation::number::CFNumber;
@@ -16,7 +18,7 @@ use core_graphics::event::{
 };
 use core_graphics::window::{
     copy_window_info, kCGNullWindowID, kCGWindowBounds, kCGWindowListExcludeDesktopElements,
-    kCGWindowListOptionOnScreenOnly, kCGWindowOwnerName,
+    kCGWindowListOptionOnScreenOnly, kCGWindowName, kCGWindowOwnerName, kCGWindowOwnerPID,
 };
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -83,6 +85,50 @@ fn dict_value_f64(dict: &CFDictionary, key: &CFString) -> f64 {
     number.and_then(|n| n.to_f64()).unwrap_or(0.0)
 }
 
+fn dict_value_i32(dict: &CFDictionary, key: *const c_void) -> i32 {
+    dict.find(key)
+        .and_then(|value| cf_type(*value))
+        .and_then(|t| t.downcast::<CFNumber>())
+        .and_then(|n| n.to_i32())
+        .unwrap_or(0)
+}
+
+fn process_basename(pid: i32) -> String {
+    if pid <= 0 {
+        return String::new();
+    }
+    let mut buf = vec![0u8; 4096];
+    let len = unsafe { libc::proc_pidpath(pid, buf.as_mut_ptr() as *mut c_void, buf.len() as u32) };
+    if len <= 0 {
+        return String::new();
+    }
+    buf.truncate(len as usize);
+    let path = String::from_utf8_lossy(&buf);
+    path.rsplit('/').next().unwrap_or_default().to_lowercase()
+}
+
+fn is_scrcpy_window(dict: &CFDictionary) -> bool {
+    let owner = dict_value_string(dict, unsafe { kCGWindowOwnerName } as *const c_void)
+        .unwrap_or_default()
+        .to_lowercase();
+    if owner.contains("scrcpy") {
+        return true;
+    }
+    let title = dict_value_string(dict, unsafe { kCGWindowName } as *const c_void)
+        .unwrap_or_default()
+        .to_lowercase();
+    if title.contains("scrcpy") || title.contains("android - click=tap") {
+        return true;
+    }
+    let pid = dict_value_i32(dict, unsafe { kCGWindowOwnerPID } as *const c_void);
+    process_basename(pid) == "scrcpy"
+}
+
+fn point_in_bounds(x: f64, y: f64, bounds: Bounds) -> bool {
+    let (bx, by, bw, bh) = bounds;
+    bx <= x && x <= bx + bw && by <= y && y <= by + bh
+}
+
 /// Port of `scrcpy_bounds()`'s window query; empty on any failure.
 fn query_scrcpy_bounds() -> Vec<Bounds> {
     let windows = match copy_window_info(
@@ -102,9 +148,7 @@ fn query_scrcpy_bounds() -> Vec<Bounds> {
             Some(d) => d,
             None => continue,
         };
-        let owner = dict_value_string(&dict, unsafe { kCGWindowOwnerName } as *const c_void)
-            .unwrap_or_default();
-        if !owner.to_lowercase().contains("scrcpy") {
+        if !is_scrcpy_window(&dict) {
             continue;
         }
         let bounds = match dict_value_dict(&dict, unsafe { kCGWindowBounds } as *const c_void) {
@@ -143,12 +187,32 @@ fn scrcpy_bounds() -> Vec<Bounds> {
 /// True when the Mac cursor (x, y) is over the scrcpy mirror window.
 /// Bounds are cached for 0.5s, as in the Python code.
 pub fn scrcpy_at(x: f64, y: f64) -> bool {
-    for (bx, by, bw, bh) in scrcpy_bounds() {
-        if bx <= x && x <= bx + bw && by <= y && y <= by + bh {
-            return true;
-        }
+    scrcpy_bounds()
+        .into_iter()
+        .any(|bounds| point_in_bounds(x, y, bounds))
+}
+
+/// Normalize every wheel source before the one shared reel-step path.
+/// Discrete mice may report only line deltas; scale one line to the exact
+/// pixel threshold so one notch becomes one NEXT/PREV step.
+fn scroll_deltas(
+    point_dx: i64,
+    point_dy: i64,
+    fixed_dx: f64,
+    fixed_dy: f64,
+    line_dx: i64,
+    line_dy: i64,
+) -> (f64, f64) {
+    if point_dx != 0 || point_dy != 0 {
+        (point_dx as f64, point_dy as f64)
+    } else if fixed_dx != 0.0 || fixed_dy != 0.0 {
+        (fixed_dx, fixed_dy)
+    } else {
+        (
+            line_dx as f64 * PIXEL_THRESHOLD,
+            line_dy as f64 * PIXEL_THRESHOLD,
+        )
     }
-    false
 }
 
 struct ListenerState {
@@ -217,14 +281,13 @@ fn handle_scroll(event: &CGEvent) -> CallbackResult {
     let shift = shift_held(event);
     let pdx = event.get_integer_value_field(EventField::SCROLL_WHEEL_EVENT_POINT_DELTA_AXIS_2);
     let pdy = event.get_integer_value_field(EventField::SCROLL_WHEEL_EVENT_POINT_DELTA_AXIS_1);
-    let (dx, dy) = if pdx == 0 && pdy == 0 {
-        (
-            event.get_double_value_field(EventField::SCROLL_WHEEL_EVENT_FIXED_POINT_DELTA_AXIS_2),
-            event.get_double_value_field(EventField::SCROLL_WHEEL_EVENT_FIXED_POINT_DELTA_AXIS_1),
-        )
-    } else {
-        (pdx as f64, pdy as f64)
-    };
+    let fdx = event.get_double_value_field(EventField::SCROLL_WHEEL_EVENT_FIXED_POINT_DELTA_AXIS_2);
+    let fdy = event.get_double_value_field(EventField::SCROLL_WHEEL_EVENT_FIXED_POINT_DELTA_AXIS_1);
+    let ldx = event.get_integer_value_field(EventField::SCROLL_WHEEL_EVENT_DELTA_AXIS_2);
+    let ldy = event.get_integer_value_field(EventField::SCROLL_WHEEL_EVENT_DELTA_AXIS_1);
+    // SHIFT+wheel and wheeling on the mirror deliberately share this exact
+    // normalization, accumulator, cooldown, and adb swipe below.
+    let (dx, dy) = scroll_deltas(pdx, pdy, fdx, fdy, ldx, ldy);
     match wheel_route(shift, scrcpy_at(x, y)) {
         WheelRoute::Pass => CallbackResult::Keep,
         WheelRoute::Consume => {
@@ -398,6 +461,23 @@ mod tests {
         // Second call hits the 500ms cache, so it must agree with the first.
         let second: bool = scrcpy_at(0.0, 0.0);
         assert_eq!(first, second);
+    }
+
+    #[test]
+    fn scroll_deltas_cover_point_fixed_and_line_wheels() {
+        assert_eq!(scroll_deltas(2, 0, 9.0, 9.0, 9, 9), (2.0, 0.0));
+        assert_eq!(scroll_deltas(0, 0, -0.25, 0.0, 9, 9), (-0.25, 0.0));
+        assert_eq!(scroll_deltas(0, 0, 0.0, 0.0, 0, -1), (0.0, -6.0));
+        assert_eq!(scroll_deltas(0, 0, 0.0, 0.0, 2, 0), (12.0, 0.0));
+    }
+
+    #[test]
+    fn mirror_bounds_include_edges() {
+        let bounds = (10.0, 20.0, 100.0, 200.0);
+        assert!(point_in_bounds(10.0, 20.0, bounds));
+        assert!(point_in_bounds(110.0, 220.0, bounds));
+        assert!(!point_in_bounds(110.1, 220.0, bounds));
+        assert!(!point_in_bounds(50.0, 19.9, bounds));
     }
 
     #[test]
