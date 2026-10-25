@@ -18,10 +18,19 @@ use objc2_app_kit::{
 };
 use objc2_foundation::{
     ns_string, MainThreadMarker, NSNotification, NSObject, NSObjectProtocol, NSPoint, NSRect,
-    NSSize, NSString,
+    NSSize, NSString, NSTimer,
 };
 use std::cell::OnceCell;
 use std::path::PathBuf;
+
+/// Env var carrying the mirror (app) pid when the title-bar button
+/// spawned this window: the window then closes with the app. A
+/// standalone `screengood settings` has no value and stays open.
+pub const SETTINGS_PARENT_ENV: &str = "SCREENGOOD_SETTINGS_PARENT_PID";
+
+/// How often the parent pid is re-checked. Half a second closes the
+/// window promptly after the app exits without burning CPU.
+const PARENT_WATCH_INTERVAL_SECS: f64 = 0.5;
 
 #[derive(Debug)]
 struct SettingsIvars {
@@ -33,6 +42,9 @@ struct SettingsIvars {
     cooldown_value: OnceCell<Retained<NSTextField>>,
     swipe_value: OnceCell<Retained<NSTextField>>,
     status: OnceCell<Retained<NSTextField>>,
+    /// Mirror pid this window closes with, when opened from the app.
+    parent_pid: Option<i32>,
+    parent_timer: OnceCell<Retained<NSTimer>>,
     initial: ScrollSettings,
     path: PathBuf,
 }
@@ -53,6 +65,16 @@ define_class!(
         #[unsafe(method(sliderChanged:))]
         fn slider_changed(&self, _sender: &NSObject) {
             self.refresh_values();
+        }
+
+        #[unsafe(method(parentWatchTick:))]
+        fn parent_watch_tick(&self, _timer: &NSObject) {
+            // Opened from the app: close when the app closes.
+            if let Some(pid) = self.ivars().parent_pid {
+                if !pid_alive(pid) {
+                    self.quit();
+                }
+            }
         }
 
         #[unsafe(method(saveSettings:))]
@@ -112,7 +134,12 @@ define_class!(
 );
 
 impl Delegate {
-    fn new(mtm: MainThreadMarker, initial: ScrollSettings, path: PathBuf) -> Retained<Self> {
+    fn new(
+        mtm: MainThreadMarker,
+        initial: ScrollSettings,
+        path: PathBuf,
+        parent_pid: Option<i32>,
+    ) -> Retained<Self> {
         let this = Self::alloc(mtm).set_ivars(SettingsIvars {
             window: OnceCell::new(),
             step_slider: OnceCell::new(),
@@ -122,6 +149,8 @@ impl Delegate {
             cooldown_value: OnceCell::new(),
             swipe_value: OnceCell::new(),
             status: OnceCell::new(),
+            parent_pid,
+            parent_timer: OnceCell::new(),
             initial,
             path,
         });
@@ -197,6 +226,9 @@ impl Delegate {
         // when creating an `NSWindow` outside a window controller.
         unsafe { window.setReleasedWhenClosed(false) };
         window.setTitle(ns_string!("ScreenGood Settings"));
+        // Fixed in place: no dragging by title bar or window background.
+        window.setMovable(false);
+        window.setMovableByWindowBackground(false);
         let view = window.contentView().expect("window must have content view");
 
         add_label(
@@ -261,6 +293,21 @@ impl Delegate {
         window.makeKeyAndOrderFront(None);
         let _ = ivars.window.set(window);
         self.refresh_values();
+
+        // Opened from the app: watch the app pid and close with it.
+        if ivars.parent_pid.is_some() {
+            // SAFETY: `target` is the delegate, which implements `parentWatchTick:`.
+            let timer = unsafe {
+                NSTimer::scheduledTimerWithTimeInterval_target_selector_userInfo_repeats(
+                    PARENT_WATCH_INTERVAL_SECS,
+                    target,
+                    sel!(parentWatchTick:),
+                    None,
+                    true,
+                )
+            };
+            let _ = ivars.parent_timer.set(timer);
+        }
 
         let app = NSApplication::sharedApplication(mtm);
         app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
@@ -350,6 +397,19 @@ fn display_path(path: &std::path::Path) -> String {
     shown
 }
 
+fn pid_alive(pid: i32) -> bool {
+    pid > 1 && unsafe { libc::kill(pid, 0) } == 0
+}
+
+/// App pid from a `SETTINGS_PARENT_ENV` value: only a plausible live
+/// pid watches. Missing, malformed, or non-positive values mean a
+/// standalone window that stays open.
+fn parent_pid_from(value: Option<&str>) -> Option<i32> {
+    value
+        .and_then(|v| v.parse::<i32>().ok())
+        .filter(|&pid| pid > 1)
+}
+
 /// Open the Settings window and run until it closes. Main thread only.
 pub fn run_settings_window() -> i32 {
     let Some(mtm) = MainThreadMarker::new() else {
@@ -358,9 +418,26 @@ pub fn run_settings_window() -> i32 {
     };
     let path = crate::settings::settings_path();
     let initial = crate::settings::load_from(&path);
+    let parent_pid = parent_pid_from(std::env::var(SETTINGS_PARENT_ENV).ok().as_deref());
     let app = NSApplication::sharedApplication(mtm);
-    let delegate = Delegate::new(mtm, initial, path);
+    let delegate = Delegate::new(mtm, initial, path, parent_pid);
     app.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
     app.run();
     0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parent_pid_only_from_plausible_env_value() {
+        assert_eq!(parent_pid_from(Some("4242")), Some(4242));
+        assert_eq!(parent_pid_from(None), None);
+        assert_eq!(parent_pid_from(Some("")), None);
+        assert_eq!(parent_pid_from(Some("abc")), None);
+        assert_eq!(parent_pid_from(Some("0")), None);
+        assert_eq!(parent_pid_from(Some("1")), None);
+        assert_eq!(parent_pid_from(Some("-5")), None);
+    }
 }

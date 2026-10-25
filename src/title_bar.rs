@@ -1,10 +1,12 @@
-//! Floating Settings tab for mirror mode (`screengood title-bar`,
-//! spawned by the mirror process): a vertical Settings button attached
-//! to the left edge of the scrcpy window, following it at display
-//! rate. The mirror window belongs to scrcpy, so macOS cannot put a
-//! real button in its title bar; this attached panel is the in-app
-//! equivalent, and it leaves the whole title bar free for dragging.
-//! The button opens the separate `screengood settings` window.
+//! Floating Settings button for mirror mode (`screengood title-bar`,
+//! spawned by the mirror process): a compact native-looking gear
+//! button attached to the top-right of the scrcpy window's title bar,
+//! following it at display rate. The mirror window belongs to scrcpy,
+//! so macOS cannot put a real button in its title bar; this attached
+//! panel is the in-app equivalent, and its transparent background
+//! lets the app's own title-bar color show through. It leaves most of
+//! the title bar free for dragging. The button opens the separate
+//! `screengood settings` window.
 
 use crate::ax;
 use crate::listener::{scrcpy_window_bounds_for_pid, scrcpy_windows, Bounds};
@@ -15,8 +17,8 @@ use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2::{define_class, msg_send, sel, DefinedClass, MainThreadOnly};
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSApplicationDelegate, NSBackingStoreType,
-    NSBezelStyle, NSButton, NSCellImagePosition, NSColor, NSFloatingWindowLevel, NSFont, NSImage,
-    NSPanel, NSScreen, NSWindowAnimationBehavior, NSWindowStyleMask,
+    NSButton, NSCellImagePosition, NSColor, NSFloatingWindowLevel, NSFont, NSImage, NSPanel,
+    NSScreen, NSWindowAnimationBehavior, NSWindowStyleMask,
 };
 use objc2_foundation::{
     ns_string, MainThreadMarker, NSActivityOptions, NSNotification, NSObject, NSObjectProtocol,
@@ -27,14 +29,15 @@ use std::ffi::c_void;
 use std::path::PathBuf;
 use std::process::{Child, Command};
 
-/// Vertical side tab centered on the mirror's left edge. It hangs
-/// mostly outside the window, overlapping just enough to read as
-/// attached, so it never covers phone content or the title bar.
-const BAR_WIDTH: f64 = 72.0;
-const BAR_HEIGHT: f64 = 104.0;
-const ATTACH_OVERLAP: f64 = 10.0;
-const SETTINGS_BUTTON_WIDTH: f64 = 64.0;
-const SETTINGS_BUTTON_HEIGHT: f64 = 88.0;
+/// Compact top-right title-bar button (button plus 8px margins).
+/// Only the right end of the title bar is covered, so the traffic
+/// lights and most of the drag area stay usable.
+const BAR_WIDTH: f64 = 132.0;
+const BAR_HEIGHT: f64 = 34.0;
+/// Hide rather than cover the native close/minimize/zoom buttons.
+const TRAFFIC_LIGHT_INSET: f64 = 76.0;
+const SETTINGS_BUTTON_WIDTH: f64 = 124.0;
+const SETTINGS_BUTTON_HEIGHT: f64 = 28.0;
 /// Follow above display rate so dragging the mirror looks attached,
 /// not stepped. Accessibility events land between these ticks too;
 /// both paths read current geometry and no-op when unchanged.
@@ -47,28 +50,24 @@ const FOLLOW_INTERVAL_SECS: f64 = 1.0 / 120.0;
 type AxObserverRef = ax::ObserverRef;
 type AxElementRef = ax::ElementRef;
 
-/// AppKit frame for the side tab on a Quartz-coordinate mirror
-/// window. Quartz origin is the primary display's top-left; AppKit's
-/// is its bottom-left, so `primary_height` flips Y. The tab is
-/// vertically centered on the left edge and clamped on-screen.
-/// `None` hides it (fullscreen or too small to carry it).
+/// AppKit frame for the top-right button on a Quartz-coordinate
+/// mirror window. Quartz origin is the primary display's top-left;
+/// AppKit's is its bottom-left, so `primary_height` flips Y. The
+/// panel's top meets the mirror's top edge. `None` hides it
+/// (fullscreen or too narrow to keep the traffic lights clear).
 fn title_bar_frame(mirror: Bounds, primary_height: f64) -> Option<NSRect> {
     let (x, y, w, h) = mirror;
     if w <= 0.0 || h <= 0.0 || primary_height <= 0.0 {
         return None;
     }
     if y <= 0.0 && h >= primary_height - 2.0 {
-        return None; // fullscreen: no edge to hang the tab on
+        return None; // fullscreen: no title area to sit on
     }
-    if w < BAR_WIDTH || h < BAR_HEIGHT + 20.0 {
+    if w < TRAFFIC_LIGHT_INSET + BAR_WIDTH {
         return None;
     }
-    let center_y = primary_height - y - h / 2.0;
     Some(NSRect::new(
-        NSPoint::new(
-            (x - BAR_WIDTH + ATTACH_OVERLAP).max(0.0),
-            center_y - BAR_HEIGHT / 2.0,
-        ),
+        NSPoint::new(x + w - BAR_WIDTH, primary_height - y - BAR_HEIGHT),
         NSSize::new(BAR_WIDTH, BAR_HEIGHT),
     ))
 }
@@ -164,6 +163,13 @@ impl Delegate {
     }
 
     fn quit(&self) {
+        // Settings opened from this mirror closes with the app. (The
+        // Settings process also watches the app pid itself, in case
+        // this helper is killed before `quit` can run.)
+        if let Some(mut child) = self.ivars().settings_child.borrow_mut().take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
         NSApplication::sharedApplication(self.mtm()).terminate(None);
     }
 
@@ -191,7 +197,9 @@ impl Delegate {
         panel.setLevel(NSFloatingWindowLevel);
         panel.setFloatingPanel(true);
         panel.setBecomesKeyOnlyIfNeeded(true);
+        // Never user-draggable: only the mirror-follow logic moves it.
         panel.setMovable(false);
+        panel.setMovableByWindowBackground(false);
         // Transparent around the button: the button itself is the tab.
         panel.setOpaque(false);
         panel.setBackgroundColor(Some(&NSColor::clearColor()));
@@ -214,20 +222,20 @@ impl Delegate {
         };
         button.setFrame(rect(
             4.0,
-            8.0,
+            3.0,
             SETTINGS_BUTTON_WIDTH,
             SETTINGS_BUTTON_HEIGHT,
         ));
-        button.setBezelStyle(NSBezelStyle::FlexiblePush);
-        button.setBezelColor(Some(&NSColor::controlAccentColor()));
-        button.setContentTintColor(Some(&NSColor::whiteColor()));
+        // Native title-bar styling: no accent bezel or forced tint, so
+        // the button takes the app/system light-or-dark colors. The
+        // transparent panel lets the real title bar show around it.
         button.setFont(Some(&NSFont::boldSystemFontOfSize(11.0)));
         if let Some(gear) = NSImage::imageWithSystemSymbolName_accessibilityDescription(
-            ns_string!("gearshape.fill"),
+            ns_string!("gearshape"),
             Some(ns_string!("Settings")),
         ) {
             button.setImage(Some(&gear));
-            button.setImagePosition(NSCellImagePosition::ImageAbove);
+            button.setImagePosition(NSCellImagePosition::ImageLeft);
             button.setImageHugsTitle(true);
         }
         view.addSubview(&button);
@@ -472,7 +480,20 @@ impl Delegate {
             }
         }
         let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("screengood"));
-        match Command::new(exe).arg("settings").spawn() {
+        // Settings closes when the app (mirror) closes: hand it the app
+        // pid to watch, falling back to this helper's own pid.
+        let watch_pid = match self.ivars().parent_pid {
+            pid if pid > 1 => pid,
+            _ => unsafe { libc::getpid() },
+        };
+        match Command::new(exe)
+            .arg("settings")
+            .env(
+                crate::settings_window::SETTINGS_PARENT_ENV,
+                watch_pid.to_string(),
+            )
+            .spawn()
+        {
             Ok(child) => *child_slot = Some(child),
             Err(e) => eprintln!("title bar: could not open settings: {e}"),
         }
@@ -544,20 +565,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn frame_is_left_side_tab_centered_on_mirror() {
+    fn frame_is_top_right_button_leaving_title_drag_area() {
         // Mirror at Quartz (100, 50) sized 400x800, primary height 1000:
-        // the tab hangs on the left edge (100 - 72 + 10 overlap) and is
-        // vertically centered (AppKit center 550, origin 550 - 52).
+        // the compact button hugs the top-right (100 + 400 - 132), its
+        // top meets the mirror top (AppKit y = 1000 - 50 - 34), and it
+        // starts well clear of the traffic lights.
         let frame = title_bar_frame((100.0, 50.0, 400.0, 800.0), 1000.0).unwrap();
-        assert_eq!(frame.origin.x, 38.0);
-        assert_eq!(frame.origin.y, 498.0);
+        assert_eq!(frame.origin.x, 368.0);
+        assert_eq!(frame.origin.y, 916.0);
         assert_eq!(frame.size.width, BAR_WIDTH);
         assert_eq!(frame.size.height, BAR_HEIGHT);
         assert_eq!(BAR_WIDTH, SETTINGS_BUTTON_WIDTH + 8.0);
-        // At the screen's left edge the tab clamps on-screen instead
-        // of hanging off it.
-        let clamped = title_bar_frame((0.0, 50.0, 400.0, 800.0), 1000.0).unwrap();
-        assert_eq!(clamped.origin.x, 0.0);
+        assert!(frame.origin.x > 100.0 + TRAFFIC_LIGHT_INSET);
     }
 
     #[test]

@@ -88,11 +88,11 @@ docs and code general-purpose — never reintroduce app-specific wording
   (upstream `hello_world_app` delegate pattern): three sliders, Save
   writes the settings file, applies on next launch, never touches the
   phone.
-- `src/title_bar.rs` — floating Settings tab (`title-bar` helper
-  spawned by mirror mode): gear Settings button on the left edge of
-  the mirror (title bar stays draggable), sticks to the scrcpy window
-  via Accessibility move/resize notifications (owner-pid bounds poll
-  as fallback), opens `settings` as a
+- `src/title_bar.rs` — floating Settings button (`title-bar` helper
+  spawned by mirror mode): native-colored gear button at the top-right
+  of the mirror title bar (rest stays draggable), sticks to the scrcpy
+  window via Accessibility move/resize notifications (owner-pid bounds
+  poll as fallback), opens `settings` as a
   sibling process, exits with the mirror. The scrcpy window is another
   process's, so this attached panel — not a literal title-bar button —
   is the supported shape; native close/minimize stay clickable.

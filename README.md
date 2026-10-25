@@ -156,10 +156,11 @@ screen there while you control it from the Mac.
 ## Settings
 
 Scroll feel is adjustable in a small native window.
-While mirroring, click the floating gear **Settings** tab on the
-left edge of the mirror window.
-It sticks to the window as it moves, and the whole title bar stays
-free, so the window is still easy to drag.
+While mirroring, click the floating gear **Settings** button at the
+top-right of the mirror window.
+Its transparent backing lets the app's own title-bar color show
+through. It sticks to the window as it moves, and most of the title
+bar stays free, so the window is still easy to drag.
 The mirror's main window title is just **ScreenGood**.
 
 The same window can also be opened from Terminal:
@@ -188,6 +189,8 @@ Deleting the settings file does the same.
 The window needs no phone. It can be opened while mirroring; the
 floating Settings button follows the mirror window and disappears in
 fullscreen or when the mirror closes.
+Opened from the button, the Settings window closes when the app
+closes; opened from Terminal, it stays open.
 Only scroll feel is adjustable; the mirror profiles above stay fixed.
 `SCREENGOOD_SETTINGS` overrides the settings file path.
 
@@ -319,7 +322,7 @@ ditto -c -k --sequesterRsrc --keepParent ScreenGood.app ScreenGood-macOS-arm64.z
 Tests and checks (no phone needed):
 
 ```sh
-cargo test                                         # 46 unit tests
+cargo test                                         # 47 unit tests
 cargo clippy --all-targets --locked -- -D warnings # same lint CI runs
 cargo fmt --check
 ./target/release/screengood test  # prints SELFTEST OK - DOWN=NEXT, UP=PREV
@@ -345,7 +348,7 @@ version.
 | `src/logic.rs` | Pure decisions: NEXT/PREV mapping, light-scroll pixel accumulation (6 px default step), 900 ms default cooldown, swipe geometry, 400 ms default swipe duration |
 | `src/settings.rs` | Scroll-feel settings file: step/cooldown/swipe values, forgiving parse + clamp, loaded once at launch |
 | `src/settings_window.rs` | Native AppKit Settings window (`objc2`): three sliders, Save applies on next launch |
-| `src/title_bar.rs` | Floating gear Settings tab on the mirror's left edge: sticks to the scrcpy window via Accessibility move/resize events (poll fallback) |
+| `src/title_bar.rs` | Floating native-colored gear Settings button at the mirror's top-right: sticks to the scrcpy window via Accessibility move/resize events (poll fallback) |
 | `src/adb.rs` | Pinned-serial `adb -s <serial> shell input` commands with a 5 s timeout |
 | `assets/` | App icon: `icon-1024.png` master + `AppIcon.icns` (made with `sips` + `iconutil`) |
 

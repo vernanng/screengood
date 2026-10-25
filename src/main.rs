@@ -500,7 +500,7 @@ fn run_mirror_mode() -> i32 {
     println!(" MIRROR MODE (scrcpy): PHONE SCREEN on Mac -> {serial}");
     println!(" click=TAP | drag=swipe | wheel=NEXT/PREV | right-click=Back (inside mirror)");
     println!(" ANYWHERE: light SHIFT+wheel=NEXT/PREV | SHIFT+mid/right=pause");
-    println!(" Settings button: floating tab on the left edge of the mirror");
+    println!(" Settings button: top-right of the mirror title bar");
     println!(" Profile: {profile}");
     println!("==============================================");
     let current_path = std::env::var("PATH").ok();
