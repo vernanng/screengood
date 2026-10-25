@@ -21,7 +21,7 @@ One Rust binary does the work. It finds the phone, opens the mirror with
 into precise up/down phone swipes over
 [`adb`](https://developer.android.com/tools/adb), so scrolling behaves the
 same inside any app. Tuned on a Samsung S25 FE, including while the same
-phone is mirrored to a monitor with Smart View.
+phone is also mirrored to an external monitor.
 
 ## Download
 
@@ -60,7 +60,7 @@ local network (mDNS `_adb-tls-connect`) and saves the address it finds.
 The frame is intentionally smaller than the phone's native 1080×2340 screen
 to keep encoding and decoding delay low. On the S25 FE, the hardware HEVC
 encoder held 59–61 fps at the USB profile even while another encode was
-running (Smart View to a monitor at the same time).
+running (mirroring out to a monitor at the same time).
 
 ## Controls
 
@@ -82,9 +82,9 @@ just one feed or player.
 Clicks on the mirror itself always belong to `scrcpy`; the extra listener
 deliberately steps aside there so one click can never land as a double tap.
 
-Watching on a monitor is optional and independent: start Samsung Smart
-View on the phone if you want the same screen on the monitor while you
-control it from the Mac.
+Watching on a monitor is optional and independent: mirror the phone to
+your monitor separately (wireless display or cable) if you want the same
+screen there while you control it from the Mac.
 
 ## One-time setup
 
@@ -104,7 +104,7 @@ For Wi-Fi:
 3. Enable **Wireless debugging**.
 4. Keep the phone screen on for the first connection.
 
-For monitor viewing, start Smart View on the phone and choose the monitor.
+For monitor viewing, mirror the phone to the monitor (wireless display or cable).
 
 ### Mac permissions
 
