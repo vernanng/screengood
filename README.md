@@ -4,74 +4,87 @@
 
 # ANDROID SCREEN MIRROR INSIDE MAC WITH CONTROL
 
+[![CI](https://github.com/vernanng/screengood/actions/workflows/ci.yml/badge.svg)](https://github.com/vernanng/screengood/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/vernanng/screengood)](https://github.com/vernanng/screengood/releases/latest)
+
 **Wi-Fi or USB-C.**
 
 See your Android phone inside a window on your Mac and control the entire
 phone with your Mac mouse — every app, every screen — without touching the
-phone. Tuned on a Samsung S25 FE, including while the same phone is mirrored
-to a Samsung TV with Smart View.
+phone:
+
+**click: tap · mouse scroll: up/down · onscreen scroll · offscreen scroll
+with SHIFT+SCROLL**
 
 One Rust binary does the work. It finds the phone, opens the mirror with
-`scrcpy`, and turns mouse wheel actions into precise up/down phone swipes over
-`adb`, so scrolling works the same inside any app.
+[`scrcpy`](https://github.com/Genymobile/scrcpy), and turns mouse-wheel moves
+into precise up/down phone swipes over
+[`adb`](https://developer.android.com/tools/adb), so scrolling behaves the
+same inside any app. Tuned on a Samsung S25 FE, including while the same
+phone is mirrored to a monitor with Smart View.
+
+## Download
+
+Grab the latest build from
+[Releases](https://github.com/vernanng/screengood/releases)
+(Apple Silicon, macOS 13 or newer):
+
+1. Download `ScreenGood-vX.Y.Z-macOS-arm64.zip` and unzip it.
+2. Move `ScreenGood.app` to `/Applications`.
+3. First launch only: **right-click the app → Open** (the build is ad-hoc
+   signed, not notarized).
+4. Do the [one-time setup](#one-time-setup) below, then just double-click
+   the app from then on.
+
+Building from source instead? See
+[Build from source](#build-from-source).
 
 ## Quick start
 
-If `ScreenGood.app` is already built, double-click it.
+1. Connect the phone by USB-C, or put phone and Mac on the same Wi-Fi with
+   Wireless debugging on.
+2. Double-click **ScreenGood.app**.
+3. The phone screen appears in a Mac window. Control it with the mouse.
 
-Otherwise, build and run:
-
-```sh
-cargo build --release
-./target/release/screengood make-app
-open ScreenGood.app
-```
-
-Terminal alternative:
-
-```sh
-./target/release/screengood mirror   # default mode
-```
-
-The Android screen appears inside the Mac mirror window. Clicks and drags in
-that window act on the phone immediately.
+USB-C is picked automatically whenever a cable-connected phone is available.
+Without a cable, the app tries the last saved Wi-Fi address, then searches the
+local network (mDNS `_adb-tls-connect`) and saves the address it finds.
 
 ## Wi-Fi or USB-C
 
 | Connection | Experience | Mirror profile |
 |---|---|---|
-| **USB-C** | Preferred. Near-zero delay and the steadiest control. | 664×1440 H.265, 12 Mbps, up to 60 fps, 0 ms video buffer, 30 ms raw-audio buffer |
-| **Wi-Fi** | No cable. Extra buffering absorbs network jitter. | 414×900, 100 ms video buffer, 100 ms audio buffer |
+| **USB-C** | Preferred. Near-zero delay and the steadiest control. | `--max-size 1440` (664×1440 on the S25 FE), H.265, 12 Mbps, up to 60 fps, 0 ms video buffer, 30 ms raw-audio buffer, Metal renderer |
+| **Wi-Fi** | No cable. Extra buffering absorbs network jitter. | `--max-size 900` (414×900), 100 ms video buffer, 100 ms audio buffer |
 
-USB-C wins automatically whenever a cable-connected phone is available. Without
-a cable, the app tries the last saved Wi-Fi address and then searches the local
-network with mDNS.
-
-The S25 FE's hardware HEVC encoder held 59–61 fps at the USB profile even while
-another encode was running. The frame is intentionally smaller than the phone's
-native 1080×2340 screen to keep encoding and decoding delay low.
+The frame is intentionally smaller than the phone's native 1080×2340 screen
+to keep encoding and decoding delay low. On the S25 FE, the hardware HEVC
+encoder held 59–61 fps at the USB profile even while another encode was
+running (Smart View to a monitor at the same time).
 
 ## Controls
 
-| Input | Action |
+| Input | Action on the phone |
 |---|---|
-| **Click** | Tap |
-| **Mouse scroll down / up** | Swipe up / down (scroll forward / back) |
-| **On-screen scroll** — plain wheel, mouse on the mirror | Swipe up / down |
-| **Off-screen scroll — SHIFT + SCROLL**, mouse anywhere else | Swipe up / down |
+| **Click** (inside the mirror) | Tap |
+| **Drag** (inside the mirror) | Swipe |
+| **Right-click** (inside the mirror) | Android Back |
+| **Onscreen scroll** — plain wheel, mouse on the mirror | Scroll down / up (NEXT / PREV) |
+| **Offscreen scroll — SHIFT + SCROLL**, mouse anywhere else | Scroll down / up (NEXT / PREV) |
+| **SHIFT + middle-click** or **SHIFT + right-click**, away from the mirror | Tap screen center (pause/resume in video players) |
 
-On-screen scroll and off-screen SHIFT+SCROLL are the same function: one
-light-scroll step at a time with the same 400 ms phone swipe, in any app.
+Onscreen scroll and offscreen SHIFT+SCROLL are one and the same function:
+wheel movement is accumulated in light-scroll steps and fired as one tuned
+**400 ms swipe** per step (`SHIFT+wheel` is the reference behaviour; the
+on-screen wheel was made to match it exactly). This works in any app, not
+just one feed or player.
 
-Also: drag = swipe · right-click inside the mirror = Android Back ·
-SHIFT+middle-click (or SHIFT+right-click) away from the mirror = tap center
-of the phone screen.
+Clicks on the mirror itself always belong to `scrcpy`; the extra listener
+deliberately steps aside there so one click can never land as a double tap.
 
-Clicks on the mirror itself belong to `scrcpy`. The listener deliberately steps
-aside there so a click cannot produce a double tap.
-
-Watching on a TV is optional. Start Samsung Smart View separately if you want
-the same phone shown on the TV while controlling it from the Mac.
+Watching on a monitor is optional and independent: start Samsung Smart
+View on the phone if you want the same screen on the monitor while you
+control it from the Mac.
 
 ## One-time setup
 
@@ -81,7 +94,7 @@ For USB-C:
 
 1. Enable Developer options.
 2. Enable **USB debugging**.
-3. Connect the phone with a data-capable USB-C cable.
+3. Connect with a data-capable USB-C cable.
 4. Unlock the phone and accept the USB-debugging prompt if shown.
 
 For Wi-Fi:
@@ -91,121 +104,178 @@ For Wi-Fi:
 3. Enable **Wireless debugging**.
 4. Keep the phone screen on for the first connection.
 
-For TV viewing, start Smart View on the phone and choose the TV.
+For monitor viewing, start Smart View on the phone and choose the monitor.
 
-### Mac
+### Mac permissions
 
-Allow **ScreenGood.app** in both places:
+The wheel listener needs ScreenGood allowed in both of these:
 
 - **Settings → Privacy & Security → Input Monitoring**
 - **Settings → Privacy & Security → Accessibility**
 
-Then reopen the app. These permissions power the global SHIFT+wheel and
-wheel-on-mirror listener. The scrcpy mirror can open without them, but the
-custom NEXT/PREV wheel controls need the listener.
+Every launch **checks first**. The app silently preflights both permissions:
 
-Every launch checks first: the app silently preflights both permissions
-and, when both are granted, opens no dialog and no Settings pane — the
-mirror just appears. Only a permission the check finds missing is ever
-requested: the app then registers itself in just that list (no `+`
-button or file picker needed) and opens just that pane. macOS does not
-allow any app to flip its own security switch, so switching ScreenGood
-**on** there is the one manual step. Because the app is ad-hoc signed
-(no keychain identity), macOS keys grants to the build's code hash, so
-after a `make-app` rebuild the check will find them missing once more
-and you re-give them for that build. Plain launches in between never
-ask again. If a rebuild leaves a stale entry that won't take effect,
-remove ScreenGood from both lists with the `-` button and reopen the
-app so it re-registers. Each launch logs its preflight result to
-`~/Library/Logs/ScreenGood.log`.
+- **Both granted** → no dialog, no Settings window, the mirror just opens.
+  Ordinary launches never ask again.
+- **One missing** → only that one is requested. The app registers itself in
+  just that list (no `+` button or file picker needed) and opens just that
+  pane. Switch ScreenGood **on** there, then reopen the app. macOS does not
+  let any app flip its own security switch, so that click is yours — once.
+
+The mirror itself (click/tap/drag through `scrcpy`) works even without these
+grants; only the wheel NEXT/PREV controls need them.
+
+Two things worth knowing:
+
+- The app is ad-hoc signed, so macOS ties grants to the exact build. A
+  *downloaded release never rebuilds*, so this is a one-time setup there.
+  If you rebuild from source with `make-app`, grant both permissions once
+  more for the new build.
+- After a rebuild the Settings rows can show **on** yet not take effect
+  (the saved grant belongs to the previous build's code hash). Fix it by
+  clearing the stale entries, then reopening the app so it re-registers:
+
+  ```sh
+  tccutil reset Accessibility com.screengood.app
+  tccutil reset ListenEvent com.screengood.app
+  ```
+
+Each launch logs its preflight result (and any `scrcpy` output) to
+`~/Library/Logs/ScreenGood.log` — Finder launches have no terminal, so that
+file is the first place to look when something seems off.
 
 ### Tools
 
-Homebrew packages `android-platform-tools` and `scrcpy` are installed
-automatically if missing. A Rust toolchain is needed only when building from
-source. There is no Python runtime dependency.
+`adb` and `scrcpy` stay external. If they are missing, the app installs the
+Homebrew packages `android-platform-tools` and `scrcpy` automatically
+([Homebrew](https://brew.sh) itself must be installed). No Python is needed
+at runtime.
+
+## Build from source
+
+Requires a Rust toolchain (pinned by `rust-toolchain.toml`: stable with
+`rustfmt` and `clippy`) and macOS 13+.
+
+```sh
+cargo build --release
+./target/release/screengood make-app   # assembles + ad-hoc signs ScreenGood.app
+open ScreenGood.app
+```
+
+Terminal alternative (no app bundle):
+
+```sh
+./target/release/screengood            # mirror mode is the default
+```
+
+Package a release zip the same way the GitHub release is made:
+
+```sh
+ditto -c -k --sequesterRsrc --keepParent ScreenGood.app ScreenGood-macOS-arm64.zip
+```
 
 ## Commands
 
 ```sh
 ./target/release/screengood              # mirror on the Mac (default)
 ./target/release/screengood mirror       # same, explicit
-./target/release/screengood listen       # wheel/click listener only
+./target/release/screengood listen       # wheel/click listener only, no mirror window
 ./target/release/screengood test         # built-in selftest; no phone needed
-./target/release/screengood wheel-probe  # 20 s raw wheel/click event log
+./target/release/screengood wheel-probe  # 20 s raw wheel/click event log (diagnostics)
 ./target/release/screengood click-probe  # click-focused probe alias
-./target/release/screengood make-app     # rebuild and sign ScreenGood.app
+./target/release/screengood make-app     # assemble + ad-hoc sign ScreenGood.app
 ```
 
-Tests:
+Tests and checks (no phone needed):
 
 ```sh
-cargo test  # 28 unit tests, no phone needed
+cargo test                        # 28 unit tests
+cargo clippy -- -D warnings
+cargo fmt --check
+./target/release/screengood test  # prints SELFTEST OK - DOWN=NEXT, UP=PREV
 ```
 
-`make-app` uses ad-hoc signing (`codesign --sign -`) with the identifier
-`com.screengood.app`. No keychain code-signing identity is used, so
-macOS permission grants do **not** survive rebuilds — re-give them after
-each `make-app` (see Mac setup above).
+`make-app` signs ad hoc (`codesign --sign -`, identifier
+`com.screengood.app`) and bundles `assets/AppIcon.icns` when present. No
+keychain signing identity is used.
 
 ## How it works
 
-`screengood` is a single Cargo binary. `adb` and `scrcpy` remain external tools;
-Rust coordinates connection, input translation, and control.
+`screengood` is a single Cargo binary (Rust 2021). It coordinates `adb` and
+`scrcpy`; it does not replace them.
 
-- `src/main.rs` — commands, mirror profiles, application flow, and selftest.
-- `src/logic.rs` — NEXT/PREV decisions, light-scroll accumulation, cooldown,
-  swipe geometry, and the 400 ms swipe duration.
-- `src/adb.rs` — pinned-serial `adb shell input` commands with a 5-second
-  execution timeout.
-- `src/discover.rs` — USB-first device selection, saved Wi-Fi address,
-  `mdns-sd` discovery, real phone-size detection, and retry flow.
-- `src/listener.rs` — direct macOS `CGEventTap` input handling, mirror-window
-  detection, suppression of consumed wheel events, and automatic tap recovery.
+| File | Role |
+|---|---|
+| `src/main.rs` | Commands and app flow: mirror profiles, permission check-then-request, single-instance replacement, GUI log redirect, `make-app`, selftest |
+| `src/discover.rs` | Phone discovery: USB-first, saved Wi-Fi address (`phone-ip.txt`), mDNS `_adb-tls-connect._tcp.local.`, real screen size via `wm size` |
+| `src/listener.rs` | Direct `CGEventTap` (via `core-graphics`): wheel/click handling, mirror-window detection, consumed-event suppression, tap auto-recovery, permission preflight/request |
+| `src/logic.rs` | Pure decisions: NEXT/PREV mapping, light-scroll pixel accumulation (6 px step), 900 ms cooldown, swipe geometry, 400 ms swipe duration |
+| `src/adb.rs` | Pinned-serial `adb -s <serial> shell input` commands with a 5 s timeout |
+| `assets/` | App icon: `icon-1024.png` master + `AppIcon.icns` (made with `sips` + `iconutil`) |
 
-The design and decision record is in
-`docs/plans/2026-10-25-rust-stack-switch.md`.
+A few behaviours exist because of hard-won macOS facts:
 
-The saved Wi-Fi address lives in `phone-ip.txt`. That file is local-only
-and is never committed.
+- **Finder has no Homebrew in `PATH`.** A double-clicked app inherits a
+  minimal GUI `PATH`, and `scrcpy` spawns `adb` by bare name — that used to
+  make double-clicks silently do nothing. `screengood` now passes `scrcpy`
+  the absolute `adb` path via the `ADB` environment variable (plus a
+  Homebrew-prefixed `PATH`).
+- **One mirror at a time.** Launching while a mirror is running replaces the
+  old instance instead of two processes fighting over the phone's one
+  screen capture.
+- **Check before asking.** Permissions are preflighted silently on every
+  launch; see [Mac permissions](#mac-permissions).
+
+Design history (the Rust stack switch, decisions, and parity checks) is in
+[`docs/plans/2026-10-25-rust-stack-switch.md`](docs/plans/2026-10-25-rust-stack-switch.md).
+
+Local-only files, never committed: `phone-ip.txt` (saved Wi-Fi address),
+`ScreenGood.app` and `target/` (build outputs).
 
 ## Troubleshooting
 
-**Nothing seems to launch**
+**Double-click does nothing**
 
-`ScreenGood.app` has no window of its own. Look for the separate `scrcpy`
-mirror window; it may have opened behind another app. Launching the app
-again while a mirror is running replaces the old instance. Since Finder
-launches have no terminal to print errors to, GUI launches (and their
-`scrcpy` child) log to `~/Library/Logs/ScreenGood.log` — check that file
-first. Finder launches also inherit a minimal `PATH` without Homebrew;
-`screengood` passes `scrcpy` the absolute `adb` path via the `ADB`
-environment variable so double-click launch works.
+`ScreenGood.app` has no window of its own — look for the separate `scrcpy`
+mirror window, which can open behind other apps. Then read
+`~/Library/Logs/ScreenGood.log`; every GUI launch and its `scrcpy` output
+land there. If a permission is missing, System Settings opens instead (see
+[Mac permissions](#mac-permissions)).
 
-**Phone not found on Wi-Fi**
+**Settings shows ScreenGood on, but it still asks**
 
-Wireless debugging rotates its port. Keep Wireless debugging on, return to the
-terminal prompt, and press ENTER. The app searches by mDNS and saves the new
-address when it connects.
-
-**USB-C phone is not detected**
-
-Unlock the phone, confirm USB debugging is enabled, accept the computer prompt
-on the phone, and use a data-capable cable rather than a charge-only cable.
+The grant is stale: it was saved for a previous build's code hash. Run the
+two `tccutil reset` commands in [Mac permissions](#mac-permissions), reopen
+the app, and toggle on once for the current build.
 
 **SHIFT+wheel does nothing**
 
-Check both Input Monitoring and Accessibility for `ScreenGood.app`, then reopen
-the app. Run `screengood wheel-probe` to see whether wheel events reach the
-listener at all.
+Confirm both Input Monitoring and Accessibility are on for
+`ScreenGood.app`, then reopen the app (grants apply to new launches). The
+log's preflight line tells you exactly which one macOS still reports as
+missing. `./target/release/screengood wheel-probe` shows whether wheel
+events reach the listener at all.
 
-**Pause fires twice**
+**Phone not found on Wi-Fi**
 
-Clicks over the mirror are intentionally left to `scrcpy`. If pause still
-double-fires, the mirror window was probably misdetected; bring the mirror to
-the front and try again.
+Wireless debugging rotates its port. Keep Wireless debugging on; from a
+terminal run, press ENTER at the retry prompt. The app searches by mDNS and
+saves the new address to `phone-ip.txt` when it connects.
+
+**USB-C phone is not detected**
+
+Unlock the phone, confirm USB debugging is on, accept the computer prompt
+on the phone, and use a data-capable cable rather than a charge-only one.
+
+**Center-tap (pause) fires twice**
+
+Clicks over the mirror are intentionally left to `scrcpy`. If a
+SHIFT+click still double-fires, the mirror window was probably
+misdetected — bring the mirror to the front and try again.
 
 **Two phone entries in `adb devices`**
 
-An IP entry plus an mDNS entry for one phone is normal. The app pins one serial
-for every `adb` command so commands cannot split across transports.
+An IP entry plus an mDNS (`_tcp`) entry for one phone is normal. The app
+pins one serial for every `adb` command, so input cannot split across
+transports.
+
