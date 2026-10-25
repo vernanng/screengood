@@ -144,6 +144,7 @@ jobs:
           set -euo pipefail
           cd release-assets
           gh release create "${{ github.ref_name }}" \
+            --repo "${{ github.repository }}" \
             --target "${{ github.sha }}" \
             --verify-tag \
             --title "ScreenGood ${{ github.ref_name }}" \
