@@ -35,10 +35,30 @@ Contents: [Download](#download) · [Quick start](#quick-start) ·
 
 ## Download
 
+Two ways to get the app:
+
+**Cargo install (free, no Gatekeeper warning):**
+
+Requires a Rust toolchain (install from
+[rustup](https://rustup.rs)) and macOS 13+.
+
+```sh
+cargo install --git https://github.com/vernanng/screengood --locked
+screengood install
+open /Applications/ScreenGood.app
+```
+
+`screengood install` builds the same double-clickable `ScreenGood.app`
+(with its icon) into `/Applications` — or into `~/Applications` when the
+system folder is not writable. Because the app is compiled on your Mac,
+macOS never quarantines it: no “Apple could not verify” dialog at all.
+Do the [one-time setup](#one-time-setup) below once for your build, then
+just double-click the app from then on.
+
+**DMG (no Rust needed):**
+
 Grab the latest build from
 [Releases](https://github.com/vernanng/screengood/releases):
-
-**DMG (recommended):**
 
 1. Download `ScreenGood-vX.Y.Z-macOS-arm64.dmg` and open it.
 2. Drag **ScreenGood** onto the **Applications** link in the DMG window.
@@ -237,12 +257,13 @@ hdiutil create -volname "ScreenGood" -srcfolder dmg-stage -ov -format UDZO Scree
 ./target/release/screengood wheel-probe  # 20 s raw wheel/click event log (diagnostics)
 ./target/release/screengood click-probe  # click-focused probe alias
 ./target/release/screengood make-app     # assemble + ad-hoc sign ScreenGood.app
+./target/release/screengood install      # install the app bundle into /Applications (or ~/Applications)
 ```
 
 Tests and checks (no phone needed):
 
 ```sh
-cargo test                        # 28 unit tests
+cargo test                        # 32 unit tests
 cargo clippy -- -D warnings
 cargo fmt --check
 ./target/release/screengood test  # prints SELFTEST OK - DOWN=NEXT, UP=PREV
@@ -250,7 +271,9 @@ cargo fmt --check
 
 `make-app` signs ad hoc (`codesign --sign -`, identifier
 `com.screengood.app`) and bundles `assets/AppIcon.icns` when present. No
-keychain signing identity is used.
+keychain signing identity is used. The plist version always follows
+`Cargo.toml` (`env!("CARGO_PKG_VERSION")`), so only one place sets the
+version.
 
 ## How it works
 

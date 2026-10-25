@@ -14,15 +14,21 @@ docs and code general-purpose — never reintroduce app-specific wording
 - `cargo fmt --check` — run the format task
 - `cargo build --release --locked` — build the project
 - `./target/release/screengood make-app` — assemble + ad-hoc sign
-  `ScreenGood.app` (identifier `com.screengood.app`, icon from `assets/`).
-- Install: `ditto ScreenGood.app /Applications/ScreenGood.app` (replace
-  first). Release packages: zip via `ditto -c -k --sequesterRsrc
-  --keepParent`, DMG via `hdiutil create -volname ScreenGood -srcfolder
-  <stage with app + /Applications symlink> -format UDZO` (verify with
-  `hdiutil verify` and a mount + `codesign --verify` before upload);
-  publish/update with `gh release` on `vernanng/screengood`.
+  `ScreenGood.app` next to the project dir (icon from `assets/` when
+  present).
+- `./target/release/screengood install` — assemble the same app (icon
+  embedded) directly into `/Applications`, or `~/Applications` when the
+  system folder is not writable; `SCREENGOOD_INSTALL_DIR` overrides the
+  target. The free no-Gatekeeper install path: `cargo install --git
+  https://github.com/vernanng/screengood --locked` then `screengood
+  install` (locally built apps carry no download quarantine).
+- Release packages: zip via `ditto -c -k --sequesterRsrc --keepParent`,
+  DMG via `hdiutil create -volname ScreenGood -srcfolder <stage with app
+  + /Applications symlink> -format UDZO` (verify with `hdiutil verify`
+  and a mount + `codesign --verify` before upload); publish/update with
+  `gh release` on `vernanng/screengood`.
 - Subcommands: `mirror` (default), `listen`, `test`, `wheel-probe`,
-  `click-probe`, `make-app`. No bash anywhere in the product.
+  `click-probe`, `make-app`, `install`. No bash anywhere in the product.
 
 ## CI & releases
 
@@ -31,11 +37,12 @@ docs and code general-purpose — never reintroduce app-specific wording
   not compile on Linux), then fmt → clippy (`--all-targets -D warnings`)
   → `cargo test --locked` → release build → selftest → `make-app` +
   codesign verify → zip + DMG artifacts. Keep local gates identical.
-- Version lives in two places that must move together: `Cargo.toml`
-  `version` and `CFBundleShortVersionString` in `make_app`'s plist.
-  Any binary *or plist* change produces a new ad-hoc code hash, which
-  invalidates TCC grants (see invariants) — bundle changes so users only
-  re-grant once per release, and say so in release notes.
+- Version is single-sourced: `Cargo.toml` `version` only; the plist
+  `CFBundleShortVersionString` is generated from
+  `env!("CARGO_PKG_VERSION")` by `assemble_app`. Any binary *or plist*
+  change produces a new ad-hoc code hash, which invalidates TCC grants
+  (see invariants) — bundle changes so users only re-grant once per
+  release, and say so in release notes.
 - CI artifact zips/DMGs are unsigned-CI builds for smoke-testing the
   packaging path; user-facing downloads are the GitHub Release assets.
 
@@ -44,7 +51,8 @@ docs and code general-purpose — never reintroduce app-specific wording
 - `src/main.rs` — CLI + app flow: mirror profiles, permission
   check-then-request, `kill_previous_instances` (single instance by
   replacement), `child_env_path`, `redirect_output_to_log_if_gui`,
-  `make_app` (signing + icon), selftest.
+  `assemble_app`/`sign_app` shared bundle assembly (`make_app` with file
+  icon, `install_app` with embedded icon), selftest.
 - `src/listener.rs` — `CGEventTap` via `core-graphics`; `check_permissions`
   (silent preflight), `request_permissions` (missing only), `scrcpy_at`
   mirror-window detection, lifetime `run`/`spawn`.
@@ -85,6 +93,8 @@ docs and code general-purpose — never reintroduce app-specific wording
   `tccutil reset Accessibility com.screengood.app` and
   `tccutil reset ListenEvent com.screengood.app`, relaunch, toggle once.
   Downloaded releases do not rebuild, so this is one-time setup there.
+  Cargo-installed users likewise grant once for their own local build
+  (each rebuild is a new code hash).
 - **Finder PATH has no Homebrew.** `scrcpy` spawns `adb` by bare name; the
   child must get `ADB=<absolute adb>` plus a Homebrew-prefixed `PATH`
   (`child_env_path`). `open` from a terminal forwards the shell PATH and

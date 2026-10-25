@@ -2,9 +2,9 @@
 //! the entire phone with the Mac mouse (Wi-Fi or USB-C).
 //!
 //! Subcommands: `mirror` (default, scrcpy + listener), `listen`,
-//! `test`, `click-probe`, `make-app`. Legacy `--mirror`/`--test`/
-//! `--click-probe` flags are accepted as aliases. Mirror is the only
-//! screen mode (pad mode was removed by user decision, 2026-10-25).
+//! `test`, `click-probe`, `make-app`, `install`. Legacy `--mirror`/
+//! `--test`/`--click-probe` flags are accepted as aliases. Mirror is the
+//! only screen mode (pad mode was removed by user decision, 2026-10-25).
 
 mod adb;
 mod discover;
@@ -69,12 +69,13 @@ fn main() {
     let code = match mode {
         "test" | "--test" => run_test(),
         "make-app" => make_app(),
+        "install" => install_app(),
         "listen" | "click-probe" | "--click-probe" | "wheel-probe" | "--wheel-probe" => {
             run_listener_mode(mode != "listen")
         }
         "mirror" | "--mirror" => run_mirror_mode(),
         other => {
-            eprintln!("unknown mode: {other}\nusage: screengood [mirror|listen|test|click-probe|wheel-probe|make-app]");
+            eprintln!("unknown mode: {other}\nusage: screengood [mirror|listen|test|click-probe|wheel-probe|make-app|install]");
             2
         }
     };
@@ -448,38 +449,114 @@ fn run_mirror_mode() -> i32 {
 fn make_app() -> i32 {
     let dir = discover::project_dir();
     let app = dir.join("ScreenGood.app");
-    let macos = app.join("Contents").join("MacOS");
-    if let Err(e) = std::fs::create_dir_all(&macos) {
-        eprintln!("make-app: {e}");
+    // Icon: assets/AppIcon.icns when the source checkout is present; the
+    // plist only references it then, so a bare checkout still builds a
+    // valid app.
+    let icon = std::fs::read(dir.join("assets").join("AppIcon.icns")).ok();
+    finish_app(&app, icon.as_deref(), "make-app")
+}
+
+/// App-style install for a Cargo-installed binary (no source checkout):
+/// assemble `ScreenGood.app` with the embedded icon directly into an
+/// Applications folder, ad-hoc signed. Because the app is built on this
+/// Mac, it carries no download quarantine, so Gatekeeper shows no malware
+/// check on first launch. `SCREENGOOD_INSTALL_DIR` overrides the target
+/// folder.
+fn install_app() -> i32 {
+    let app = install_root().join("ScreenGood.app");
+    let icon: &[u8] = include_bytes!("../assets/AppIcon.icns");
+    finish_app(&app, Some(icon), "install")
+}
+
+/// Pick the install folder: `SCREENGOOD_INSTALL_DIR` when set, else
+/// `/Applications` when writable, else `~/Applications` (no admin needed).
+fn install_root() -> PathBuf {
+    if let Ok(dir) = std::env::var("SCREENGOOD_INSTALL_DIR") {
+        if !dir.is_empty() {
+            return PathBuf::from(dir);
+        }
+    }
+    choose_install_root(
+        dir_is_writable(Path::new("/Applications")),
+        home_applications(),
+    )
+}
+
+/// Prefer system Applications when writable, else the user's. Split out so
+/// the decision is unit-testable without touching the real filesystem.
+fn choose_install_root(system_writable: bool, home_apps: PathBuf) -> PathBuf {
+    if system_writable {
+        PathBuf::from("/Applications")
+    } else {
+        home_apps
+    }
+}
+
+fn home_applications() -> PathBuf {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("Applications")
+}
+
+fn dir_is_writable(dir: &Path) -> bool {
+    if !dir.is_dir() {
+        return false;
+    }
+    let probe = dir.join(format!(".screengood-write-probe-{}", std::process::id()));
+    if std::fs::write(&probe, b"probe").is_err() {
+        return false;
+    }
+    let _ = std::fs::remove_file(&probe);
+    true
+}
+
+/// Shared bundle assembly used by both `make-app` (checkout + file icon)
+/// and `install` (cargo binary + embedded icon).
+fn finish_app(app: &Path, icon: Option<&[u8]>, cmd: &str) -> i32 {
+    let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("screengood"));
+    if let Err(e) = assemble_app(app, &exe, icon) {
+        eprintln!("{cmd}: {e}");
         return 1;
     }
-    let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("screengood"));
+    match sign_app(app) {
+        Ok(()) => {
+            println!(
+                "ScreenGood.app ready at {} (double-click = mirror)",
+                app.display()
+            );
+            0
+        }
+        Err(e) => {
+            eprintln!("{cmd}: {e}");
+            1
+        }
+    }
+}
+
+fn assemble_app(app: &Path, exe: &Path, icon: Option<&[u8]>) -> std::io::Result<()> {
+    let macos = app.join("Contents").join("MacOS");
+    std::fs::create_dir_all(&macos)?;
     let dest = macos.join("screengood");
     if exe != dest {
-        if let Err(e) = std::fs::copy(&exe, &dest) {
-            eprintln!("make-app copy: {e}");
-            return 1;
-        }
+        std::fs::copy(exe, &dest)?;
     }
-    // App icon: assets/AppIcon.icns (from assets/icon-1024.png via
-    // iconutil). Copied into Contents/Resources when present; the plist
-    // only references it then, so a bare checkout still builds a valid app.
-    let icon_src = dir.join("assets").join("AppIcon.icns");
     let mut icon_key = String::new();
-    if icon_src.exists() {
+    if let Some(bytes) = icon {
         let resources = app.join("Contents").join("Resources");
-        if let Err(e) = std::fs::create_dir_all(&resources) {
-            eprintln!("make-app resources: {e}");
-            return 1;
-        }
-        if let Err(e) = std::fs::copy(&icon_src, resources.join("AppIcon.icns")) {
-            eprintln!("make-app icon copy: {e}");
-            return 1;
-        }
+        std::fs::create_dir_all(&resources)?;
+        std::fs::write(resources.join("AppIcon.icns"), bytes)?;
         icon_key = "\n    <key>CFBundleIconFile</key><string>AppIcon</string>".to_string();
     }
-    let plist = app.join("Contents").join("Info.plist");
-    let plist_body = format!(
+    std::fs::write(
+        app.join("Contents").join("Info.plist"),
+        plist_body(env!("CARGO_PKG_VERSION"), &icon_key),
+    )?;
+    Ok(())
+}
+
+fn plist_body(version: &str, icon_key: &str) -> String {
+    format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -489,43 +566,31 @@ fn make_app() -> i32 {
     <key>CFBundleName</key><string>ScreenGood</string>
     <key>CFBundleDisplayName</key><string>ScreenGood</string>{icon_key}
     <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleShortVersionString</key><string>0.1.0</string>
+    <key>CFBundleShortVersionString</key><string>{version}</string>
     <key>LSMinimumSystemVersion</key><string>13.0</string>
     <key>NSPrincipalClass</key><string>NSApplication</string>
 </dict>
 </plist>
 "#
-    );
-    if let Err(e) = std::fs::write(&plist, plist_body) {
-        eprintln!("make-app plist: {e}");
-        return 1;
-    }
-    let signed = Command::new("codesign")
+    )
+}
+
+fn sign_app(app: &Path) -> Result<(), String> {
+    let app_str = app.to_str().unwrap_or_default();
+    match Command::new("codesign")
         .args([
             "--force",
             "--sign",
             "-",
             "--identifier",
             "com.screengood.app",
-            app.to_str().unwrap_or_default(),
+            app_str,
         ])
-        .status();
-    match signed {
-        Ok(s) if s.success() => {
-            println!(
-                "ScreenGood.app ready at {} (double-click = mirror)",
-                app.display()
-            );
-            0
-        }
-        Ok(s) => {
-            eprintln!("codesign failed: {s}");
-            1
-        }
-        Err(e) => {
-            eprintln!("codesign: {e}");
-            1
-        }
+        .status()
+    {
+        Ok(s) if s.success() => Ok(()),
+        Ok(s) => Err(format!("codesign failed: {s}")),
+        Err(e) => Err(format!("codesign: {e}")),
     }
 }
 
@@ -599,5 +664,62 @@ mod tests {
             child_env_path(Path::new("adb"), Some("/usr/bin")),
             "/usr/bin"
         );
+    }
+
+    #[test]
+    fn plist_body_carries_version_and_optional_icon() {
+        let with_icon = plist_body(
+            "0.2.0",
+            "\n    <key>CFBundleIconFile</key><string>AppIcon</string>",
+        );
+        assert!(with_icon.contains("<string>0.2.0</string>"));
+        assert!(with_icon.contains("CFBundleIconFile"));
+        let bare = plist_body("0.2.0", "");
+        assert!(bare.contains("<string>0.2.0</string>"));
+        assert!(!bare.contains("CFBundleIconFile"));
+    }
+
+    #[test]
+    fn choose_install_root_prefers_writable_system_apps() {
+        let home = PathBuf::from("/Users/someone/Applications");
+        assert_eq!(
+            choose_install_root(true, home.clone()),
+            PathBuf::from("/Applications")
+        );
+        assert_eq!(choose_install_root(false, home.clone()), home);
+    }
+
+    fn assemble_test_app(name: &str, icon: Option<&[u8]>) -> PathBuf {
+        let root = std::env::temp_dir().join(format!("{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let fake_exe = root.join("screengood-src");
+        std::fs::write(&fake_exe, b"fake-binary").unwrap();
+        let app = root.join("ScreenGood.app");
+        assemble_app(&app, &fake_exe, icon).unwrap();
+        assert!(app.join("Contents/MacOS/screengood").is_file());
+        app
+    }
+
+    #[test]
+    fn assemble_app_writes_iconed_bundle_with_crate_version() {
+        let app = assemble_test_app("screengood-assemble-icon", Some(b"fake-icon"));
+        let plist = std::fs::read_to_string(app.join("Contents/Info.plist")).unwrap();
+        assert!(plist.contains(&format!("<string>{}</string>", env!("CARGO_PKG_VERSION"))));
+        assert!(plist.contains("CFBundleIconFile"));
+        assert_eq!(
+            std::fs::read(app.join("Contents/Resources/AppIcon.icns")).unwrap(),
+            b"fake-icon"
+        );
+        let _ = std::fs::remove_dir_all(app.parent().unwrap());
+    }
+
+    #[test]
+    fn assemble_app_without_icon_omits_icon_key() {
+        let app = assemble_test_app("screengood-assemble-bare", None);
+        let plist = std::fs::read_to_string(app.join("Contents/Info.plist")).unwrap();
+        assert!(!plist.contains("CFBundleIconFile"));
+        assert!(!app.join("Contents/Resources").exists());
+        let _ = std::fs::remove_dir_all(app.parent().unwrap());
     }
 }
