@@ -13,20 +13,25 @@ docs and code general-purpose — never reintroduce app-specific wording
 - `cargo clippy --all-targets --locked -- -D warnings` — run the lint task
 - `cargo fmt --check` — run the format task
 - `cargo build --release --locked` — build the project
-- `./target/release/screengood make-app` — assemble + ad-hoc sign
+- `./target/release/screengood make-app` — assemble + sign
   `ScreenGood.app` next to the project dir (icon from `assets/` when
-  present).
+  present; stable local identity when `setup-signing` was run, else
+  ad-hoc).
 - `./target/release/screengood install` — assemble the same app (icon
   embedded) directly into `/Applications`, or `~/Applications` when the
   system folder is not writable; `SCREENGOOD_INSTALL_DIR` overrides the
   target. The free no-Gatekeeper install path: `cargo install --git
   https://github.com/vernanng/screengood --locked` then `screengood
   install` (locally built apps carry no download quarantine).
-- Release packages: zip via `ditto -c -k --sequesterRsrc --keepParent`,
-  DMG via `hdiutil create -volname ScreenGood -srcfolder <stage with app
-  + /Applications symlink> -format UDZO` (verify with `hdiutil verify`
-  and a mount + `codesign --verify` before upload); publish/update with
-  `gh release` on `vernanng/screengood`.
+- Release packages: ZIP via `ditto -c -k --sequesterRsrc --keepParent`
+  (the current release asset; v0.2.1 intentionally ships no DMG, removed
+  with `gh release delete-asset`). The DMG recipe (`hdiutil create
+  -volname ScreenGood -srcfolder <stage with app + READ-ME-FIRST +
+  /Applications symlink> -format UDZO`, still built as a CI artifact for
+  drag-to-Applications distribution; verify with `hdiutil verify` and a
+  mount + `codesign --verify` before any upload). Publish/update with
+  `gh release` on `vernanng/screengood`, and keep the release notes'
+  install block, asset table, and SHA-256s accurate.
 - `./target/release/screengood setup-signing` — one-time, user-run:
   creates the free `ScreenGood Local Signing` identity in a dedicated
   keychain file under `~/Library/Application Support/ScreenGood/` (login
@@ -49,8 +54,9 @@ docs and code general-purpose — never reintroduce app-specific wording
   change produces a new ad-hoc code hash, which invalidates TCC grants
   (see invariants) — bundle changes so users only re-grant once per
   release, and say so in release notes.
-- CI artifact zips/DMGs are unsigned-CI builds for smoke-testing the
-  packaging path; user-facing downloads are the GitHub Release assets.
+- CI artifact ZIPs/DMGs are ad-hoc-signed CI builds for smoke-testing
+  the packaging path; user-facing downloads are the GitHub Release
+  assets.
 
 ## Code Map
 

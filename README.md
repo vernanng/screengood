@@ -39,10 +39,12 @@ Two ways to get the app:
 
 **Cargo install (free, no Gatekeeper warning):**
 
-Requires a Rust toolchain (install from
-[rustup](https://rustup.rs)) and macOS 13+.
+Copy-paste install for macOS 13+ (installs Rust itself if missing; safe
+to run even if you already have it):
 
 ```sh
+curl https://sh.rustup.rs -sSf | sh
+source "$HOME/.cargo/env"
 cargo install --git https://github.com/vernanng/screengood --locked
 screengood install
 open /Applications/ScreenGood.app
@@ -55,16 +57,17 @@ macOS never quarantines it: no “Apple could not verify” dialog at all.
 Do the [one-time setup](#one-time-setup) below once for your build, then
 just double-click the app from then on.
 
-**DMG (no Rust needed):**
+**ZIP download (no Rust needed):**
 
 Grab the latest build from
-[Releases](https://github.com/vernanng/screengood/releases):
+[Releases](https://github.com/vernanng/screengood/releases) (currently a
+`.zip` of the app — the DMG disk image was removed):
 
-1. Download `ScreenGood-vX.Y.Z-macOS-arm64.dmg` and open it.
-2. Drag **ScreenGood** onto the **Applications** link in the DMG window.
-3. Allow the first launch (next section). This build is ad-hoc signed, not
+1. Download `ScreenGood-vX.Y.Z-macOS-arm64.zip`, unzip it, and move
+   **ScreenGood.app** to `/Applications`.
+2. Allow the first launch (next section). This build is ad-hoc signed, not
    notarized, so macOS blocks the first open of the downloaded copy.
-4. Do the [one-time setup](#one-time-setup) below, then just double-click
+3. Do the [one-time setup](#one-time-setup) below, then just double-click
    the app from then on.
 
 ### First launch: “Apple could not verify ScreenGood.app …”
@@ -100,8 +103,7 @@ xattr -dr com.apple.quarantine /Applications/ScreenGood.app
 open /Applications/ScreenGood.app
 ```
 
-A plain `.zip` of the same app is attached to each release as an
-alternative. Building from source instead? See
+Prefer building from source? See
 [Build from source](#build-from-source).
 
 ## Quick start
@@ -253,7 +255,8 @@ Terminal alternative (no app bundle):
 ./target/release/screengood            # mirror mode is the default
 ```
 
-Package release files the same way CI and the GitHub release do:
+Package files the same way CI does. The release currently ships the
+ZIP only; the DMG recipe is kept for drag-to-Applications distribution:
 
 ```sh
 # zip
@@ -284,8 +287,8 @@ hdiutil create -volname "ScreenGood" -srcfolder dmg-stage -ov -format UDZO Scree
 Tests and checks (no phone needed):
 
 ```sh
-cargo test                        # 35 unit tests
-cargo clippy -- -D warnings
+cargo test                                         # 35 unit tests
+cargo clippy --all-targets --locked -- -D warnings # same lint CI runs
 cargo fmt --check
 ./target/release/screengood test  # prints SELFTEST OK - DOWN=NEXT, UP=PREV
 ```
@@ -395,7 +398,17 @@ transports.
    rm -f ~/Library/Logs/ScreenGood.log
    ```
 
-3. From a source checkout, `phone-ip.txt`, `ScreenGood.app`, and `target/`
+3. If you ran `screengood setup-signing`, also remove its material:
+
+   ```sh
+   security remove-trusted-cert ~/Library/Application\ Support/ScreenGood/signing-cert.pem
+   rm -rf ~/Library/Application\ Support/ScreenGood
+   ```
+
+4. If you installed via Cargo, `cargo uninstall screengood` removes the
+   command-line binary.
+
+5. From a source checkout, `phone-ip.txt`, `ScreenGood.app`, and `target/`
    in the project folder can also be deleted. `adb`/`scrcpy` themselves
    are Homebrew packages — remove with `brew uninstall scrcpy
    android-platform-tools` only if nothing else needs them.
