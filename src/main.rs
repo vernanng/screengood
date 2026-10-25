@@ -461,22 +461,41 @@ fn make_app() -> i32 {
             return 1;
         }
     }
+    // App icon: assets/AppIcon.icns (from assets/icon-1024.png via
+    // iconutil). Copied into Contents/Resources when present; the plist
+    // only references it then, so a bare checkout still builds a valid app.
+    let icon_src = dir.join("assets").join("AppIcon.icns");
+    let mut icon_key = String::new();
+    if icon_src.exists() {
+        let resources = app.join("Contents").join("Resources");
+        if let Err(e) = std::fs::create_dir_all(&resources) {
+            eprintln!("make-app resources: {e}");
+            return 1;
+        }
+        if let Err(e) = std::fs::copy(&icon_src, resources.join("AppIcon.icns")) {
+            eprintln!("make-app icon copy: {e}");
+            return 1;
+        }
+        icon_key = "\n    <key>CFBundleIconFile</key><string>AppIcon</string>".to_string();
+    }
     let plist = app.join("Contents").join("Info.plist");
-    let plist_body = r#"<?xml version="1.0" encoding="UTF-8"?>
+    let plist_body = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
     <key>CFBundleExecutable</key><string>screengood</string>
     <key>CFBundleIdentifier</key><string>com.screengood.app</string>
     <key>CFBundleName</key><string>ScreenGood</string>
-    <key>CFBundleDisplayName</key><string>ScreenGood</string>
+    <key>CFBundleDisplayName</key><string>ScreenGood</string>{icon_key}
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>0.1.0</string>
     <key>LSMinimumSystemVersion</key><string>13.0</string>
     <key>NSPrincipalClass</key><string>NSApplication</string>
 </dict>
 </plist>
-"#;
+"#
+    );
     if let Err(e) = std::fs::write(&plist, plist_body) {
         eprintln!("make-app plist: {e}");
         return 1;
