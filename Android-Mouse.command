@@ -1,20 +1,34 @@
 #!/bin/bash
-# Android-Mouse.command - Desktop. Mac mouse controls Android + ALL Reels-Scroll features, one launcher.
-#   INSIDE mirror window : click=tap (center=pause) | drag=swipe | plain wheel=DISABLED | right=Back | middle=Home
-#   ANYWHERE (TV, no window focus): light SHIFT+wheel=NEXT/PREV | SHIFT+middle/right-click=VIDEO pause/resume
-#   Listener handles SHIFT+wheel everywhere; it only steps aside for SHIFT+clicks over the mirror.
-ADB="/opt/homebrew/bin/adb"
-SCRCPY="/opt/homebrew/bin/scrcpy"
-PY="/opt/homebrew/bin/python3"
-IPFILE="$HOME/Desktop/fb-reels-tv-ip.txt"
-PYFILE="$HOME/Desktop/fb-reels-scroll.py"
-REELS="$HOME/Desktop/Reels-Scroll.command"
-export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+# Android-Mouse.command - Desktop. B MODE (default): NO mirror on Mac.
+#   Mac shows a blank phone-shaped PAD. Use your CABLE MOUSE on it, watch the Samsung TV:
+#     click = tap same spot on phone | drag = swipe | wheel in pad = NEXT/PREV | right-click = Back
+#   ANYWHERE: light SHIFT+wheel = NEXT/PREV | SHIFT+middle/right-click = VIDEO pause/resume (listener)
+#   Sound comes from the TV (phone is making only ONE stream, so no scrcpy lag / no crackle).
+#   Old scrcpy mirror is still available:  ./Android-Mouse.command --mirror
+DIR="$(cd "$(dirname "$0")" && pwd)"  # wherever this file lives (Desktop today)
+if command -v brew >/dev/null 2>&1; then BREW_BIN="$(brew --prefix)/bin"
+elif [ -x /opt/homebrew/bin/adb ]; then BREW_BIN="/opt/homebrew/bin"
+else BREW_BIN="/usr/local/bin"; fi
+ADB="$BREW_BIN/adb"; [ -x "$ADB" ] || ADB="$(command -v adb || echo "$BREW_BIN/adb")"
+SCRCPY="$BREW_BIN/scrcpy"; [ -x "$SCRCPY" ] || SCRCPY="$(command -v scrcpy || echo "$BREW_BIN/scrcpy")"
+PY="$BREW_BIN/python3"; [ -x "$PY" ] || PY="$(command -v python3 || echo "$BREW_BIN/python3")"
+IPFILE="$DIR/fb-reels-tv-ip.txt"
+PYFILE="$DIR/fb-reels-scroll.py"
+PADFILE="$DIR/fb-reels-pad.py"
+REELS="$DIR/Reels-Scroll.command"
+export ADB_BIN="$ADB"  # helper .py files use the same adb
+export PATH="$BREW_BIN:/opt/homebrew/bin:/usr/local/bin:$PATH"
 cd "$HOME" || exit 1
 
-[ -x "$SCRCPY" ] || brew install scrcpy
 [ -x "$ADB" ] || brew install android-platform-tools
 [ -x "$PY" ] || brew install python
+
+ensure_pynput() {  # system python if pynput already there, else project .venv (never --break-system-packages)
+  "$PY" -c "import pynput" 2>/dev/null && return 0
+  [ -x "$DIR/.venv/bin/python" ] || "$PY" -m venv --system-site-packages "$DIR/.venv" || return 1
+  "$DIR/.venv/bin/python" -m pip install -q pynput 2>/dev/null
+  if "$DIR/.venv/bin/python" -c "import pynput" 2>/dev/null; then PY="$DIR/.venv/bin/python"; else return 1; fi
+}
 
 pick_serial() {
   local d
@@ -23,42 +37,310 @@ pick_serial() {
   [ -z "$SERIAL" ] && SERIAL=$(printf '%s\n' "$d" | head -n 1)
 }
 
-pick_serial
-if [ -z "$SERIAL" ] && [ -f "$IPFILE" ]; then
-  "$ADB" connect "$(cat "$IPFILE")" >/dev/null 2>&1; sleep 2; pick_serial
+# --- phone discovery, same as Reels-Scroll.command (saved IP, then mDNS) ---
+is_connected() { "$ADB" devices 2>/dev/null | grep -q $'\tdevice$'; }
+
+resolve_ip() {  # $1 = hostname -> IPv4 (adb can't use .local names)
+  local h="${1%.}" f=/tmp/adb-g.txt
+  rm -f "$f"
+  dns-sd -G v4 "$h" >"$f" 2>&1 &
+  local pid=$!
+  sleep 4
+  kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
+  grep -ao '[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*' "$f" 2>/dev/null | head -n 1
+  rm -f "$f"
+}
+
+auto_connect() {
+  is_connected && return 0
+  "$ADB" disconnect >/dev/null 2>&1
+  "$ADB" kill-server >/dev/null 2>&1
+  sleep 1
+  "$ADB" start-server >/dev/null 2>&1
+  for _ in 1 2 3; do
+    is_connected && return 0
+    sleep 2
+  done
+  if [ -n "$SAVED_IP" ]; then
+    "$ADB" connect "$SAVED_IP" >/dev/null 2>&1; sleep 2
+    is_connected && return 0
+  fi
+  rm -f /tmp/adb-browse.txt
+  dns-sd -B _adb-tls-connect._tcp local >/tmp/adb-browse.txt 2>&1 &
+  BPID=$!
+  sleep 6
+  kill $BPID 2>/dev/null; wait $BPID 2>/dev/null
+  INSTANCES=$(awk '/Add/ {print $NF}' /tmp/adb-browse.txt 2>/dev/null | sort -u)
+  rm -f /tmp/adb-browse.txt
+  for inst in $INSTANCES; do
+    rm -f /tmp/adb-lookup.txt
+    dns-sd -L "$inst" _adb-tls-connect._tcp local >/tmp/adb-lookup.txt 2>&1 &
+    LPID=$!
+    sleep 4
+    kill $LPID 2>/dev/null; wait $LPID 2>/dev/null
+    HP=$(sed -n 's/.*can be reached at \([^ :]*\)\.*:\([0-9]*\).*/\1:\2/p' /tmp/adb-lookup.txt | head -n 1 | tr -d ' ')
+    rm -f /tmp/adb-lookup.txt
+    [ -z "$HP" ] && continue
+    HP=${HP/.local.:/.local:}
+    HOST=${HP%:*}; PORT=${HP##*:}
+    IP=$(resolve_ip "$HOST")
+    [ -n "$IP" ] && HP="$IP:$PORT"
+    echo "Found $inst -> $HP, connecting..."
+    "$ADB" connect "$HP" >/dev/null 2>&1; sleep 2
+    if is_connected; then echo "$HP" > "$IPFILE"; SAVED_IP="$HP"; return 0; fi
+  done
+  return 1
+}
+
+check_trust() {  # 0 = Input Monitoring allowed, 1 = blocked by macOS (pad still works)
+  OUT=$("$PY" -c '
+from pynput import mouse, keyboard
+import time
+m = mouse.Listener(on_scroll=lambda x,y,dx,dy: None)
+k = keyboard.Listener(on_press=lambda key: None)
+m.start(); k.start()
+time.sleep(2)
+m.stop(); k.stop()
+print("PROBE_DONE")' 2>&1)
+  echo "$OUT" | grep -qi "not trusted" && return 1
+  echo "$OUT" | grep -q PROBE_DONE
+}
+
+write_pad() {
+  cat > "$PADFILE" <<'PYEOF'
+#!/usr/bin/env python3
+# AUTO-GENERATED by Android-Mouse.command (write_pad) on every run - edit there, not here.
+"""B mode pad: blank phone-shaped window. Cable mouse click=tap, drag=swipe. Watch TV."""
+import os, sys, time, subprocess, threading, shutil
+ADB = os.environ.get("ADB_BIN") or shutil.which("adb") or "/opt/homebrew/bin/adb"
+SERIAL = os.environ.get("ADB_SERIAL", "")
+PW = int(os.environ.get("PHONE_W", "1080"))  # launchers export real `wm size`; default = S25 FE
+PH = int(os.environ.get("PHONE_H", "2340"))
+CX = PW // 2
+SWIPE_BOT = int(round(PH * 1700 / 2340))  # known-good S25 FE points, scaled to any screen
+SWIPE_TOP = int(round(PH * 700 / 2340))
+TAP_Y = int(round(PH * 1150 / 2340))
+
+def adb_cmd(*args):
+    cmd = [ADB] + (["-s", SERIAL] if SERIAL else []) + ["shell", "input"] + list(args)
+    def _run():
+        try: subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
+        except Exception: pass
+    threading.Thread(target=_run, daemon=True).start()
+
+def to_phone(px, py, w, h):
+    """View point (AppKit: origin bottom-left) -> phone pixel (origin top-left)."""
+    if w <= 0 or h <= 0: return (PW // 2, PH // 2)
+    x = min(max(px / w, 0.0), 1.0) * PW
+    y = (1.0 - min(max(py / h, 0.0), 1.0)) * PH
+    return (int(round(x)), int(round(y)))
+
+def selftest():
+    ok = True
+    cases = [((175, 379, 350, 758), (PW // 2, PH // 2)), ((0, 758, 350, 758), (0, 0)), ((350, 0, 350, 758), (PW, PH))]
+    for (px, py, w, h), exp in cases:
+        got = to_phone(px, py, w, h)
+        good = got == exp; ok = ok and good
+        print(f"  pad map ({px},{py}) -> {got} (expect {exp}) [{'PASS' if good else 'FAIL'}]", flush=True)
+    print("PAD SELFTEST " + ("OK" if ok else "FAILED"), flush=True)
+    return ok
+
+if __name__ == "__main__" and "--test" in sys.argv:
+    sys.exit(0 if selftest() else 1)
+
+if __name__ == "__main__":
+    import objc
+    from AppKit import (NSApplication, NSWindow, NSView, NSColor, NSFont, NSBezierPath,
+                        NSMakeRect, NSFontAttributeName, NSForegroundColorAttributeName)
+    from Foundation import NSString, NSObject
+
+    def draw_text(s, x, y, size, color):
+        attrs = {NSFontAttributeName: NSFont.systemFontOfSize_(size),
+                 NSForegroundColorAttributeName: color}
+        NSString.stringWithString_(s).drawAtPoint_withAttributes_((x, y), attrs)
+
+    def view_point(view, event):
+        loc = event.locationInWindow()
+        return view.convertPoint_fromView_(loc, None)
+
+    class PadView(NSView):
+        def initWithFrame_(self, frame):
+            self = objc.super(PadView, self).initWithFrame_(frame)
+            if self is None: return None
+            self._down = None; self._cur = None; self._mark = None
+            self._wacc = 0.0; self._wlast = 0.0
+            return self
+
+        def drawRect_(self, rect):
+            b = self.bounds(); w, h = b.size.width, b.size.height
+            NSColor.colorWithCalibratedRed_green_blue_alpha_(0.08, 0.09, 0.12, 1.0).setFill()
+            NSBezierPath.bezierPathWithRect_(b).fill()
+            # phone outline
+            NSColor.colorWithCalibratedRed_green_blue_alpha_(0.16, 0.19, 0.26, 1.0).setFill()
+            NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(NSMakeRect(8, 8, w - 16, h - 16), 26, 26).fill()
+            NSColor.whiteColor().setStroke()
+            p = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(NSMakeRect(8, 8, w - 16, h - 16), 26, 26)
+            p.setLineWidth_(2.0); p.stroke()
+            cx, cy = w / 2.0, h / 2.0
+            draw_text("REELS PAD - watch TV", cx - 78, h - 42, 15, NSColor.whiteColor())
+            draw_text("click = tap", cx - 34, cy + 26, 14, NSColor.lightGrayColor())
+            draw_text("(center click = pause)", cx - 72, cy + 2, 12, NSColor.grayColor())
+            # right-side Reels action rail guides (phone x~960, like/comment/share)
+            for frac, label in ((0.34, "like"), (0.47, "comment"), (0.60, "share")):
+                yy = h * frac
+                NSColor.colorWithCalibratedRed_green_blue_alpha_(0.25, 0.30, 0.42, 1.0).setFill()
+                NSBezierPath.bezierPathWithOvalInRect_(NSMakeRect(w - 62, yy - 20, 42, 42)).fill()
+                draw_text(label, w - 60, yy - 6, 10, NSColor.whiteColor())
+            draw_text("drag up = NEXT REEL", cx - 70, 52, 13, NSColor.lightGrayColor())
+            draw_text("wheel = NEXT/PREV - right-click = Back", cx - 118, 28, 11, NSColor.grayColor())
+            if self._mark:
+                mx, my = self._mark
+                NSColor.greenColor().setFill()
+                NSBezierPath.bezierPathWithOvalInRect_(NSMakeRect(mx - 9, my - 9, 18, 18)).fill()
+            if self._down and self._cur:
+                NSColor.yellowColor().setStroke()
+                lp = NSBezierPath.bezierPath()
+                lp.moveToPoint_(self._down); lp.lineToPoint_(self._cur); lp.setLineWidth_(2.0); lp.stroke()
+
+        # --- mouse ---
+        def acceptsFirstResponder(self): return True
+
+        def mouseDown_(self, event):
+            pt = view_point(self, event); self._down = pt; self._cur = pt
+            self.setNeedsDisplay_(True)
+
+        def mouseDragged_(self, event):
+            self._cur = view_point(self, event); self.setNeedsDisplay_(True)
+
+        def mouseUp_(self, event):
+            if self._down is None: return
+            b = self.bounds(); w, h = b.size.width, b.size.height
+            x1, y1 = to_phone(self._down.x, self._down.y, w, h)
+            end = view_point(self, event); x2, y2 = to_phone(end.x, end.y, w, h)
+            self._mark = end
+            dist = ((end.x - self._down.x) ** 2 + (end.y - self._down.y) ** 2) ** 0.5
+            if dist < 12:
+                print(f"tap {x1} {y1}", flush=True); adb_cmd("tap", str(x1), str(y1))
+            else:
+                print(f"swipe {x1} {y1} -> {x2} {y2}", flush=True)
+                adb_cmd("swipe", str(x1), str(y1), str(x2), str(y2), "300")
+            self._down = None; self._cur = None; self.setNeedsDisplay_(True)
+
+        def rightMouseDown_(self, event):
+            print("right-click -> Back", flush=True); adb_cmd("keyevent", "4")
+
+        def scrollWheel_(self, event):
+            now = time.time()
+            if now - self._wlast < 0.65: return
+            d = float(event.scrollingDeltaY())
+            if event.hasPreciseScrollingDeltas():
+                self._wacc += d
+                if abs(self._wacc) < 5.0: return
+                d, self._wacc = self._wacc, 0.0
+            if d == 0: return
+            self._wlast = now
+            if d < 0:  # wheel down = NEXT
+                print("wheel -> NEXT", flush=True); adb_cmd("swipe", str(CX), str(SWIPE_BOT), str(CX), str(SWIPE_TOP), "300")
+            else:
+                print("wheel -> PREV", flush=True); adb_cmd("swipe", str(CX), str(SWIPE_TOP), str(CX), str(SWIPE_BOT), "300")
+
+        def keyDown_(self, event):
+            code = event.keyCode()
+            if code == 49:  # space = pause/resume
+                adb_cmd("tap", str(CX), str(TAP_Y))
+            elif code == 125:  # down arrow = NEXT
+                adb_cmd("swipe", str(CX), str(SWIPE_BOT), str(CX), str(SWIPE_TOP), "300")
+            elif code == 126:  # up arrow = PREV
+                adb_cmd("swipe", str(CX), str(SWIPE_TOP), str(CX), str(SWIPE_BOT), "300")
+            else:
+                objc.super(PadView, self).keyDown_(event)
+
+    class Delegate(NSObject):
+        def windowWillClose_(self, note):
+            NSApplication.sharedApplication().terminate_(None)
+
+    app = NSApplication.sharedApplication()
+    app.setActivationPolicy_(0)
+    W, H = 350, 758
+    mask = 1 | 2 | 4 | 8  # titled | closable | miniaturizable | resizable
+    win = NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(NSMakeRect(80, 80, W, H), mask, 2, False)
+    win.setTitle_("Reels Pad - watch TV (click = tap)")
+    view = PadView.alloc().initWithFrame_(NSMakeRect(0, 0, W, H))
+    win.setContentView_(view)
+    win.makeFirstResponder_(view)
+    delegate = Delegate.alloc().init()
+    win.setDelegate_(delegate)
+    win.makeKeyAndOrderFront_(None)
+    app.activateIgnoringOtherApps_(True)
+    print(f"PAD OPEN ({W}x{H}) -> phone {PW}x{PH} on {SERIAL or 'default device'}. Close window to stop.", flush=True)
+    app.run()
+PYEOF
+}
+
+if [ "$1" = "--test" ]; then
+  echo "=== REVIEW (one file, pad auto-written to $PADFILE) ==="
+  write_pad
+  "$PY" "$PADFILE" --test
+  exit $?
 fi
-while [ -z "$SERIAL" ]; do
+
+[ -f "$IPFILE" ] && SAVED_IP=$(cat "$IPFILE") || SAVED_IP=""
+auto_connect
+while ! is_connected; do
   echo "Phone not found. Same WiFi as Mac + Wireless debugging ON on S25 FE."
   read -p "Press ENTER to search again: " _
-  [ -f "$IPFILE" ] && "$ADB" connect "$(cat "$IPFILE")" >/dev/null 2>&1
-  sleep 2; pick_serial
+  auto_connect
 done
+pick_serial
 export ADB_SERIAL="$SERIAL"
+SIZE=$("$ADB" -s "$SERIAL" shell wm size 2>/dev/null | grep -o '[0-9]*x[0-9]*' | head -n 1)
+case "$SIZE" in *x*) export PHONE_W="${SIZE%x*}" PHONE_H="${SIZE#*x}" ;; esac
+"$ADB" -s "$SERIAL" shell input keyevent 224 >/dev/null 2>&1  # wake phone screen
 
-echo "=============================================="
-echo " Android MOUSE + REELS -> $SERIAL"
-echo " INSIDE window : click=TAP | drag=swipe | plain wheel=OFF"
-echo " ANYWHERE      : light SHIFT+wheel=NEXT/PREV | SHIFT+mid/right-click=pause"
-echo " Close the mirror window (or Ctrl+C here) to stop both."
-echo "=============================================="
-
-# --- Reels-Scroll features: same SHIFT+wheel / SHIFT+click listener, in background ---
+# --- Reels-Scroll features: SHIFT+wheel / SHIFT+click listener, in background ---
+# Always regenerate the helper from Reels-Scroll.command so listener fixes reach B mode at once.
 LISTENER_PID=""
-if [ ! -f "$PYFILE" ] && [ -f "$REELS" ]; then "$REELS" --test >/dev/null 2>&1; fi
+if [ -f "$REELS" ]; then
+  "$REELS" --test >/dev/null 2>&1 || echo "Warning: Reels listener selftest failed - using on-disk helper if present."
+fi
+ensure_pynput
 if [ -f "$PYFILE" ] && "$PY" -c "import pynput" 2>/dev/null; then
-  "$PY" "$PYFILE" &
-  LISTENER_PID=$!
-  echo "Reels listener ON (pid $LISTENER_PID) - SHIFT+wheel works everywhere, incl. over the mirror."
+  if check_trust; then
+    "$PY" "$PYFILE" &
+    LISTENER_PID=$!
+  else
+    echo "macOS blocked the SHIFT+wheel listener (Input Monitoring). Pad still works."
+    echo "Allow Terminal in Settings > Privacy > Input Monitoring + Accessibility, quit Terminal (Cmd+Q), reopen."
+    open "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent" 2>/dev/null
+    sleep 1
+    open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility" 2>/dev/null
+  fi
 else
-  echo "Reels listener unavailable (helper/pynput missing) - mirror control still works."
+  echo "Reels listener unavailable (helper/pynput missing) - pad still works."
 fi
 cleanup() { [ -n "$LISTENER_PID" ] && kill "$LISTENER_PID" 2>/dev/null; }
 trap cleanup EXIT INT TERM
 
-# Audio ON: phone audio plays on the Mac via scrcpy (mute the TV if you hear an echo)
-"$SCRCPY" -s "$SERIAL" --stay-awake --max-size 900 \
-  --window-title "Android - click=tap, light SHIFT+wheel=NEXT/PREV, SHIFT+click=tap"
-RC=$?
+if [ "$1" = "--mirror" ]; then
+  [ -x "$SCRCPY" ] || brew install scrcpy
+  echo "=============================================="
+  echo " MIRROR MODE (scrcpy, laggy WiFi) -> $SERIAL"
+  echo "=============================================="
+  "$SCRCPY" -s "$SERIAL" --stay-awake --max-size 900 \
+    --window-title "Android - click=tap, light SHIFT+wheel=NEXT/PREV, SHIFT+click=tap"
+  RC=$?
+else
+  write_pad
+  "$PY" "$PADFILE" --test
+  echo "=============================================="
+  echo " B MODE: NO MIRROR - watch the TV, mouse on the PAD"
+  echo " click=TAP | drag=swipe | wheel=NEXT/PREV | right-click=Back"
+  echo " ANYWHERE: light SHIFT+wheel=NEXT/PREV | SHIFT+mid/right=pause"
+  echo " Sound: TV speakers. Close the pad window to stop."
+  echo "=============================================="
+  "$PY" "$PADFILE"
+  RC=$?
+fi
 cleanup
 trap - EXIT INT TERM
 exit $RC
