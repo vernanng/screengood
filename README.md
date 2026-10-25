@@ -39,9 +39,9 @@ Needs a Rust toolchain ([rustup](https://rustup.rs)):
 ```sh
 cargo build --release
 ./target/release/screengood make-app   # assembles + codesigns ScreenGood.app
-cargo test                             # 22 unit tests, no phone needed
+cargo test                             # 25 unit tests, no phone needed
 ./target/release/screengood test       # binary selftest (same cases as the old --test)
-./target/release/screengood click-probe  # 20s: are middle/right clicks seen at all?
+./target/release/screengood wheel-probe  # 20s: log raw wheel/click events
 ```
 
 `make-app` signs ad-hoc with the stable identifier `com.screengood.app`, so the

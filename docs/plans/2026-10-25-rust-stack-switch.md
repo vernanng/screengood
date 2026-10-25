@@ -1,8 +1,8 @@
-# Switch the code stack to Rust — Draft plan (under grill)
+# Switch the code stack to Rust — Final plan
 
 Status: **Final** — grill settled Q1–Q6 as recommended (Q1 amended: no bash); accepted by user via `go` on 2026-10-25. **Scope amendment (same day, user instruction): pad mode removed entirely — mirror is the only screen mode.** Q4 below is superseded; `src/pad.rs`, the `pad` subcommand, `to_phone`, and the `objc2` dependencies were dropped before any pad code landed.
 
-Implementation status: **complete — all 5 steps landed.** Steps 1–4 in the Rust-stack commit (22 unit tests, clippy/fmt clean, binary selftest OK, `ScreenGood.app` codesigned `com.screengood.app`, live USB discovery prints `Phone OK`). Step 5 cutover unlocked by the user on 2026-10-25: `Android-Mouse.command`, `Reels-Scroll.command`, and `fb-reels-lib.sh` deleted (recoverable from git history), README rewritten for the Rust mirror-only build, `.gitignore` reduced to Rust outputs + the phone-IP file. Remaining manual item: the one-time Input Monitoring + Accessibility grant for `ScreenGood.app`.
+Implementation status: **complete — all 5 steps landed and real-device parity is closed.** Steps 1–4 landed in the Rust-stack commit; the latest full run before the final duration retune passed 25 unit tests with clippy/fmt and the binary selftest clean. Step 5 cutover was unlocked by the user on 2026-10-25: `Android-Mouse.command`, `Reels-Scroll.command`, and `fb-reels-lib.sh` deleted (recoverable from git history), README rewritten for the Rust mirror-only build, and `.gitignore` reduced to Rust outputs + the phone-IP file. Follow-up wheel work aligned on-screen wheeling with the SHIFT+wheel NEXT/PREV path, including reliable scrcpy-window detection and line-delta support. The production swipe duration is 400 ms (`SWIPE_DUR_MS`). The user confirmed on 2026-10-25 that SHIFT+wheel works, so no manual parity item remains open.
 
 ## Goal
 
