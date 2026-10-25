@@ -453,11 +453,23 @@ transports.
    rm -rf ~/Library/Application\ Support/ScreenGood
    ```
 
-4. If you installed via Cargo, `cargo uninstall screengood` removes the
-   command-line binary.
+4. If you installed via Cargo, remove the command-line binary:
 
-5. From a source checkout, `phone-ip.txt`, `ScreenGood.app`, and `target/`
-   in the project folder can also be deleted. `adb`/`scrcpy` themselves
-   are Homebrew packages — remove with `brew uninstall scrcpy
-   android-platform-tools` only if nothing else needs them.
+   ```sh
+   cargo uninstall screengood
+   ```
+
+5. From a source checkout, delete its generated files (run inside the
+   project folder):
+
+   ```sh
+   rm -rf ScreenGood.app target phone-ip.txt
+   ```
+
+   `adb`/`scrcpy` themselves are Homebrew packages — remove only if
+   nothing else needs them:
+
+   ```sh
+   brew uninstall scrcpy android-platform-tools
+   ```
 
