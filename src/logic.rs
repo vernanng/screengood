@@ -9,6 +9,8 @@ use std::time::{Duration, Instant};
 pub const PIXEL_THRESHOLD: f64 = 6.0;
 /// Minimum time between two fired steps (prevents double-fire).
 pub const COOLDOWN: Duration = Duration::from_millis(900);
+/// Duration of the NEXT/PREV `adb shell input swipe`, in milliseconds.
+pub const SWIPE_DUR_MS: u32 = 500;
 /// Accumulator resets when wheel ticks pause longer than this.
 pub const ACCUM_RESET: Duration = Duration::from_millis(350);
 

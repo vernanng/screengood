@@ -22,12 +22,12 @@ fn main() {
     let code = match mode {
         "test" | "--test" => run_test(),
         "make-app" => make_app(),
-        "listen" | "click-probe" | "--click-probe" => {
-            run_listener_mode(mode == "click-probe" || mode == "--click-probe")
+        "listen" | "click-probe" | "--click-probe" | "wheel-probe" | "--wheel-probe" => {
+            run_listener_mode(mode != "listen")
         }
         "mirror" | "--mirror" => run_mirror_mode(),
         other => {
-            eprintln!("unknown mode: {other}\nusage: screengood [mirror|listen|test|click-probe|make-app]");
+            eprintln!("unknown mode: {other}\nusage: screengood [mirror|listen|test|click-probe|wheel-probe|make-app]");
             2
         }
     };

@@ -288,6 +288,27 @@ fn handle_scroll(event: &CGEvent) -> CallbackResult {
     // SHIFT+wheel and wheeling on the mirror deliberately share this exact
     // normalization, accumulator, cooldown, and adb swipe below.
     let (dx, dy) = scroll_deltas(pdx, pdy, fdx, fdy, ldx, ldy);
+    let on_mirror = scrcpy_at(x, y);
+    if lock_state().map(|st| st.cfg.probe).unwrap_or(false) {
+        println!(
+            "[{}] WHEEL shift={} at=({:.0},{:.0}) mirror={} route={:?} pt=({},{}) fixed=({:.2},{:.2}) line=({},{}) norm=({:.1},{:.1})",
+            now_hms(),
+            shift,
+            x,
+            y,
+            on_mirror,
+            wheel_route(shift, on_mirror),
+            pdx,
+            pdy,
+            fdx,
+            fdy,
+            ldx,
+            ldy,
+            dx,
+            dy
+        );
+        return CallbackResult::Keep;
+    }
     match wheel_route(shift, scrcpy_at(x, y)) {
         WheelRoute::Pass => CallbackResult::Keep,
         WheelRoute::Consume => {
@@ -296,7 +317,11 @@ fn handle_scroll(event: &CGEvent) -> CallbackResult {
                     let now = Instant::now();
                     match st.acc.accumulate(dx, dy, now) {
                         Some(action) if st.cooldown.try_fire(now) => {
-                            let cmd = st.cfg.adb.swipe_action_cmd(st.cfg.geo, action, 400);
+                            let cmd = st.cfg.adb.swipe_action_cmd(
+                                st.cfg.geo,
+                                action,
+                                crate::logic::SWIPE_DUR_MS,
+                            );
                             Some((st.cfg.adb.clone(), cmd, action))
                         }
                         _ => None,
@@ -402,7 +427,7 @@ pub fn run(cfg: ListenerConfig) {
     }
 
     if probe {
-        println!("CLICK-PROBE: press SHIFT+middle-click and SHIFT+right-click. Logging every middle/right press for 20s...");
+        println!("PROBE (20s, log-only): now do (1) SHIFT+wheel with mouse AWAY from mirror, (2) plain wheel ON the mirror. Logging every wheel/click event...");
         std::thread::spawn(|| {
             std::thread::sleep(Duration::from_secs(20));
             println!("PROBE DONE - if no lines appeared, macOS blocked the listener or the mouse has no middle button (use SHIFT+right-click instead).");
