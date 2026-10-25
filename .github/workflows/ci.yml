@@ -3,10 +3,14 @@ name: CI
 # Build and test the Rust project with Cargo.
 # The crate links macOS frameworks (CoreGraphics/ApplicationServices via
 # core-graphics/core-foundation), so CI must run on a macOS runner.
+#
+# Tag pushes (v*) run the same build, then the `release` job packages the
+# uploaded artifacts as versioned files and publishes a GitHub release.
 
 on:
   push:
     branches: [main]
+    tags: [v*]
   pull_request:
   workflow_dispatch:
 
@@ -24,6 +28,7 @@ jobs:
   build-and-test:
     name: Build & test (macOS)
     runs-on: macos-latest
+    timeout-minutes: 25
 
     steps:
       - name: Check out repository
@@ -58,6 +63,21 @@ jobs:
           codesign --verify --strict ScreenGood.app
           codesign -dv ScreenGood.app
 
+      - name: Check bundle version matches Cargo.toml
+        run: |
+          set -euo pipefail
+          expected="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+          actual="$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ScreenGood.app/Contents/Info.plist)"
+          test "$expected" = "$actual"
+
+      - name: Smoke-test Cargo install path
+        run: |
+          set -euo pipefail
+          cargo install --locked --path . --force
+          SCREENGOOD_INSTALL_DIR="$RUNNER_TEMP/sg-install-test" screengood install
+          codesign --verify --strict "$RUNNER_TEMP/sg-install-test/ScreenGood.app"
+          "$RUNNER_TEMP/sg-install-test/ScreenGood.app/Contents/MacOS/screengood" test
+
       - name: Package app bundle (zip)
         run: ditto -c -k --sequesterRsrc --keepParent ScreenGood.app ScreenGood-macOS-arm64.zip
 
@@ -78,3 +98,65 @@ jobs:
             ScreenGood-macOS-arm64.zip
             ScreenGood-macOS-arm64.dmg
           if-no-files-found: error
+
+  release:
+    name: Publish GitHub release
+    needs: build-and-test
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: macos-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download app artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: ScreenGood-macOS-arm64
+          path: release-assets
+
+      - name: Verify and stage versioned assets
+        run: |
+          set -euo pipefail
+          cd release-assets
+          hdiutil verify ScreenGood-macOS-arm64.dmg
+          rm -rf zip-check && mkdir zip-check
+          ditto -x -k ScreenGood-macOS-arm64.zip zip-check
+          codesign --verify --strict zip-check/ScreenGood.app
+          cp ScreenGood-macOS-arm64.dmg "ScreenGood-${{ github.ref_name }}-macOS-arm64.dmg"
+          cp ScreenGood-macOS-arm64.zip "ScreenGood-${{ github.ref_name }}-macOS-arm64.zip"
+          {
+            echo "**ScreenGood ${{ github.ref_name }}** — mirror an Android phone inside a Mac window and control the entire phone with the Mac mouse, over **Wi-Fi or USB-C**."
+            echo
+            echo "## Install with Cargo (recommended, bash)"
+            echo
+            echo '```bash'
+            echo "curl https://sh.rustup.rs -sSf | sh"
+            echo 'source "$HOME/.cargo/env"'
+            echo "cargo install --git https://github.com/vernanng/screengood --locked"
+            echo "screengood install"
+            echo "open /Applications/ScreenGood.app"
+            echo '```'
+            echo
+            echo "No Rust? Unzip \`ScreenGood-${{ github.ref_name }}-macOS-arm64.zip\`, move the app to \`/Applications\`, then allow the first launch once via **Settings → Privacy & Security → Open Anyway** and switch the app on in **Accessibility** + **Input Monitoring**. The app is ad-hoc signed, not notarized."
+            echo
+            echo "Built from \`${{ github.sha }}\` by CI (fmt, Clippy, unit tests, selftest, Cargo-install smoke test, codesign verify all passed)."
+            echo
+            echo "SHA-256:"
+            echo
+            shasum -a 256 "ScreenGood-${{ github.ref_name }}-macOS-arm64.dmg" "ScreenGood-${{ github.ref_name }}-macOS-arm64.zip" | sed 's/^/- `/; s/  /`: `/; s/$/`/'
+          } > release-notes.md
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cd release-assets
+          gh release create "${{ github.ref_name }}" \
+            --target "${{ github.sha }}" \
+            --verify-tag \
+            --title "ScreenGood ${{ github.ref_name }}" \
+            --notes-file release-notes.md \
+            "ScreenGood-${{ github.ref_name }}-macOS-arm64.dmg" \
+            "ScreenGood-${{ github.ref_name }}-macOS-arm64.zip"

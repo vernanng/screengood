@@ -43,11 +43,18 @@ docs and code general-purpose — never reintroduce app-specific wording
 
 ## CI & releases
 
-- `.github/workflows/ci.yml` runs on every push to `main` and on PRs:
-  `macos-latest` (mandatory — the crate links macOS frameworks and will
-  not compile on Linux), then fmt → clippy (`--all-targets -D warnings`)
-  → `cargo test --locked` → release build → selftest → `make-app` +
-  codesign verify → zip + DMG artifacts. Keep local gates identical.
+- `.github/workflows/ci.yml` runs on every push to `main`, on PRs, and
+  on `v*` tag pushes: `macos-latest` (mandatory — the crate links macOS
+  frameworks and will not compile on Linux), 25 min timeout, then fmt →
+  clippy (`--all-targets -D warnings`) → `cargo test --locked` →
+  release build → selftest → `make-app` + codesign verify → bundle
+  version check (plist vs `Cargo.toml`) → Cargo-install smoke test
+  (`cargo install --path .`, `install` to a temp dir, verify + selftest)
+  → zip + DMG artifacts. Keep local gates identical.
+- Pushing a `v*` tag additionally runs the `release` job (10 min
+  timeout, `contents: write`): it re-verifies the artifacts, stages
+  versioned filenames, and publishes the GitHub release live with
+  generated notes + SHA-256s (`--verify-tag` guards the tag target).
 - Version is single-sourced: `Cargo.toml` `version` only; the plist
   `CFBundleShortVersionString` is generated from
   `env!("CARGO_PKG_VERSION")` by `assemble_app`. Any binary *or plist*

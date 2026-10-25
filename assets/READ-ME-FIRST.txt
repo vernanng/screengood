@@ -7,7 +7,7 @@ ScreenGood — how to open it the first time
    macOS will say Apple could not verify ScreenGood.app.
    Click Done. Do not click Move to Trash.
 
-   This is expected. The GitHub build is ad-hoc signed, not notarized.
+   This is expected. This build is ad-hoc signed, not notarized.
    It does not mean malware was found.
 
 3. Open Settings -> Privacy & Security.
@@ -23,5 +23,9 @@ Terminal alternative (after copying the app to /Applications):
   xattr -dr com.apple.quarantine /Applications/ScreenGood.app
   open /Applications/ScreenGood.app
 
-Next, grant Accessibility and Input Monitoring once when the app asks.
-See the project README: https://github.com/vernanng/screengood
+Next, grant Accessibility and Input Monitoring once when the app asks,
+then reopen the app (grants apply to new launches).
+
+Still asking after you switched it on? The grant went stale — see
+"Settings shows ScreenGood on, but it still asks" under Troubleshooting
+in the project README: https://github.com/vernanng/screengood
