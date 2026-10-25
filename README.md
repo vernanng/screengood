@@ -42,10 +42,43 @@ Grab the latest build from
 
 1. Download `ScreenGood-vX.Y.Z-macOS-arm64.dmg` and open it.
 2. Drag **ScreenGood** onto the **Applications** link in the DMG window.
-3. First launch only: **right-click the app in `/Applications` → Open**
-   (the build is ad-hoc signed, not notarized).
+3. Allow the first launch (next section). This build is ad-hoc signed, not
+   notarized, so macOS blocks the first open of the downloaded copy.
 4. Do the [one-time setup](#one-time-setup) below, then just double-click
    the app from then on.
+
+### First launch: “Apple could not verify ScreenGood.app …”
+
+This warning is expected for the GitHub download. It does not mean malware
+was found. It means the app has no Apple Developer ID signature and no
+notarization, so macOS cannot verify the publisher. Removing the warning
+for everyone would require an Apple Developer ID and notarization. This
+project deliberately ships ad-hoc signed instead (no keychain identity).
+
+Allow this one copy, once, either way:
+
+**Settings (recommended)**
+
+1. Double-click **ScreenGood** in `/Applications`. Close the warning with
+   **Done**. Do not choose **Move to Trash**.
+2. Open **Settings → Privacy & Security**. Scroll to the **Security**
+   section near the bottom.
+3. Next to the message saying ScreenGood was blocked, click **Open
+   Anyway**. Confirm **Open Anyway** again and authenticate if asked.
+4. ScreenGood launches. Later double-clicks open normally.
+
+Older advice to right-click → **Open** no longer bypasses this dialog on
+current macOS, so use **Open Anyway** above.
+
+**Terminal (alternative)**
+
+Copy the app to `/Applications` first, then remove the download-quarantine
+flag from that copy:
+
+```sh
+xattr -dr com.apple.quarantine /Applications/ScreenGood.app
+open /Applications/ScreenGood.app
+```
 
 A plain `.zip` of the same app is attached to each release as an
 alternative. Building from source instead? See
@@ -189,6 +222,7 @@ ditto -c -k --sequesterRsrc --keepParent ScreenGood.app ScreenGood-macOS-arm64.z
 # dmg (drag-to-Applications)
 mkdir -p dmg-stage
 ditto ScreenGood.app dmg-stage/ScreenGood.app
+cp assets/READ-ME-FIRST.txt dmg-stage/READ-ME-FIRST.txt
 ln -s /Applications dmg-stage/Applications
 hdiutil create -volname "ScreenGood" -srcfolder dmg-stage -ov -format UDZO ScreenGood-macOS-arm64.dmg
 ```
@@ -252,6 +286,13 @@ Local-only files, never committed: `phone-ip.txt` (saved Wi-Fi address),
 `ScreenGood.app` and `target/` (build outputs).
 
 ## Troubleshooting
+
+**“Apple could not verify ScreenGood.app is free of malware …”**
+
+The downloaded build is ad-hoc signed and not notarized. Follow the
+one-time **Open Anyway** steps under [Download](#download). Do not
+choose **Move to Trash**. The alternative Terminal fix there is
+`xattr -dr com.apple.quarantine /Applications/ScreenGood.app`.
 
 **Double-click does nothing**
 

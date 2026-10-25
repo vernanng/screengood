@@ -65,6 +65,7 @@ jobs:
         run: |
           mkdir -p dmg-stage
           ditto ScreenGood.app dmg-stage/ScreenGood.app
+          cp assets/READ-ME-FIRST.txt dmg-stage/READ-ME-FIRST.txt
           ln -s /Applications dmg-stage/Applications
           hdiutil create -volname "ScreenGood" -srcfolder dmg-stage -ov -format UDZO ScreenGood-macOS-arm64.dmg
           hdiutil verify ScreenGood-macOS-arm64.dmg

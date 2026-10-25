@@ -1,0 +1,27 @@
+ScreenGood — how to open it the first time
+==========================================
+
+1. Drag ScreenGood.app onto the Applications link in this window.
+
+2. Double-click ScreenGood in /Applications.
+   macOS will say Apple could not verify ScreenGood.app.
+   Click Done. Do not click Move to Trash.
+
+   This is expected. The GitHub build is ad-hoc signed, not notarized.
+   It does not mean malware was found.
+
+3. Open Settings -> Privacy & Security.
+   Scroll to the Security section near the bottom.
+
+4. Next to the message saying ScreenGood was blocked, click Open Anyway.
+   Confirm Open Anyway again and authenticate if asked.
+
+ScreenGood launches. Later double-clicks open normally.
+
+Terminal alternative (after copying the app to /Applications):
+
+  xattr -dr com.apple.quarantine /Applications/ScreenGood.app
+  open /Applications/ScreenGood.app
+
+Next, grant Accessibility and Input Monitoring once when the app asks.
+See the project README: https://github.com/vernanng/screengood
