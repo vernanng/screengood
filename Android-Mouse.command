@@ -55,8 +55,8 @@ fi
 cleanup() { [ -n "$LISTENER_PID" ] && kill "$LISTENER_PID" 2>/dev/null; }
 trap cleanup EXIT INT TERM
 
-# --no-audio: keep Reels audio on the TV, not duplicated on the Mac
-"$SCRCPY" -s "$SERIAL" --no-audio --stay-awake --max-size 900 \
+# Audio ON: phone audio plays on the Mac via scrcpy (mute the TV if you hear an echo)
+"$SCRCPY" -s "$SERIAL" --stay-awake --max-size 900 \
   --window-title "Android - click=tap, wheel=NEXT/PREV, SHIFT+click=tap"
 RC=$?
 cleanup
