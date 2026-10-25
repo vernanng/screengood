@@ -196,14 +196,27 @@ def selftest():
     cok = (calls2 == [])
     print(f"  SHIFT+click over mirror -> no double-tap [{('PASS' if cok else 'FAIL')}]", flush=True)
     if not cok: ok = False
-    # plain wheel over mirror = suppressed (removed); plain wheel elsewhere = passes through
+    # plain wheel on the mirror screen = NEXT/PREV (suppressed from scrcpy); elsewhere passes through
+    globals()['acc_dx'] = globals()['acc_dy'] = 0.0; globals()['acc_last'] = 0.0
     globals()['scrcpy_at'] = lambda x, y: True
-    pd1 = wheel_decision(10, 10, False, 0, -10)
+    pd1 = wheel_decision(10, 10, False, 0, -10, now=50.0)
+    globals()['acc_dx'] = globals()['acc_dy'] = 0.0
+    pd3 = wheel_decision(10, 10, False, 0, 10, now=50.1)
     globals()['scrcpy_at'] = lambda x, y: False
     pd2 = wheel_decision(10, 10, False, 0, -10)
-    pok = (pd1 == (True, None) and pd2 == (False, None))
-    print(f"  plain wheel mirror=off / elsewhere=on [{('PASS' if pok else 'FAIL')}]", flush=True)
+    pok = (pd1 == (True, "NEXT") and pd3 == (True, "PREV") and pd2 == (False, None))
+    print(f"  plain wheel mirror=NEXT/PREV / elsewhere=on [{('PASS' if pok else 'FAIL')}]", flush=True)
     if not pok: ok = False
+    # pynput fallback (Quartz tap unavailable): plain wheel on mirror also fires NEXT
+    calls3 = []
+    globals()['run_cmd'] = lambda c: calls3.append(c)
+    globals()['scrcpy_at'] = lambda x, y: True
+    globals()['shift_held'] = False; globals()['last_fire'] = 0.0
+    on_scroll(10, 10, 0, -1)
+    globals()['run_cmd'] = orig_run
+    fok = (calls3 == [NEXT_CMD])
+    print(f"  fallback plain wheel on mirror -> NEXT [{('PASS' if fok else 'FAIL')}]", flush=True)
+    if not fok: ok = False
     # light scroll: three tiny -2px SHIFT+wheel ticks must add up to one NEXT
     globals()['acc_dx'] = globals()['acc_dy'] = 0.0; globals()['acc_last'] = 0.0
     acts = [wheel_decision(10, 10, True, 0, -2, now=100.0 + i * 0.05)[1] for i in range(3)]
@@ -229,7 +242,7 @@ def fire(action, sync=True):
     now = time.time()
     if now - last_fire < COOLDOWN: return False
     last_fire = now
-    print(f"[{time.strftime('%H:%M:%S')}] Shift+wheel -> {action}", flush=True)
+    print(f"[{time.strftime('%H:%M:%S')}] wheel -> {action}", flush=True)
     cmd = NEXT_CMD if action == "NEXT" else PREV_CMD
     if sync: run_cmd(cmd)
     else: threading.Thread(target=run_cmd, args=(cmd,), daemon=True).start()
@@ -246,11 +259,12 @@ def accumulate_pixels(dx, dy, now=None):
 
 def wheel_decision(x, y, shift, dx, dy, now=None):
     """(suppress, action): SHIFT+wheel is ours everywhere (light, pixel-based);
-    plain wheel over the mirror is removed; plain wheel elsewhere passes through."""
+    plain wheel while the cursor is on the mirror screen also steps NEXT/PREV;
+    plain wheel elsewhere passes through to the Mac app unchanged."""
     if shift:
         return (True, accumulate_pixels(dx, dy, now=now))
     if scrcpy_at(x, y):
-        return (True, None)
+        return (True, accumulate_pixels(dx, dy, now=now))
     return (False, None)
 
 def _quartz_cb(proxy, event_type, event, refcon):
@@ -295,7 +309,7 @@ def start_quartz_tap():
             src = Quartz.CFMachPortCreateRunLoopSource(None, _tap, 0)
             Quartz.CFRunLoopAddSource(Quartz.CFRunLoopGetCurrent(), src, Quartz.kCFRunLoopCommonModes)
             Quartz.CGEventTapEnable(_tap, True)
-            print("Wheel tap ON: light SHIFT+wheel = NEXT/PREV | plain wheel over mirror = disabled", flush=True)
+            print("Wheel tap ON: light SHIFT+wheel = NEXT/PREV | wheel on mirror screen = NEXT/PREV", flush=True)
             Quartz.CFRunLoopRun()
         except Exception as e:
             print(f"Quartz wheel tap failed ({e}) - fallback to line scroll", flush=True)
@@ -303,7 +317,7 @@ def start_quartz_tap():
 
 def on_scroll(x, y, dx, dy):
     global last_fire
-    if not shift_held: return
+    if not shift_held and not scrcpy_at(x, y): return
     # Fallback path (line deltas). Quartz tap above handles light/pixel scrolls and
     # suppresses these events when it is active; shared cooldown prevents double-fire.
     action = decide(dx, dy)
@@ -364,7 +378,7 @@ if __name__ == "__main__":
         kl.join(); ml.join()
         sys.exit(0)
     from pynput import mouse, keyboard
-    print("Hold SHIFT + wheel DOWN = NEXT | UP = PREV (light scroll ok) | SHIFT+middle-click (or SHIFT+right-click) = VIDEO pause/resume. Plain wheel over mirror is disabled. Ctrl+C stops.", flush=True)
+    print("Hold SHIFT + wheel DOWN = NEXT | UP = PREV (light scroll ok) | SHIFT+middle-click (or SHIFT+right-click) = VIDEO pause/resume. Plain wheel while the cursor is on the mirror screen = NEXT/PREV too. Ctrl+C stops.", flush=True)
     start_quartz_tap()
     kl = keyboard.Listener(on_press=on_press, on_release=on_release)
     ml = mouse.Listener(on_scroll=on_scroll, on_click=on_click)

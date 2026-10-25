@@ -1,6 +1,6 @@
 #!/bin/bash
 # Android-Mouse.command - Desktop. DEFAULT (double-click): scrcpy MIRROR.
-#   The PHONE SCREEN shows on the Mac. Inside it: click = tap | drag = swipe | right-click = Back
+#   The PHONE SCREEN shows on the Mac. Inside it: click = tap | drag = swipe | wheel = NEXT/PREV | right-click = Back
 #   ANYWHERE: light SHIFT+wheel = NEXT/PREV | SHIFT+middle/right-click = VIDEO pause/resume (listener)
 #   No-screen TV mode from Terminal instead:  ./Android-Mouse.command --pad
 #     (blank phone-shaped PAD, watch the TV - no scrcpy lag, but NO phone screen on the Mac)
@@ -335,7 +335,7 @@ else  # default, incl. explicit --mirror: scrcpy mirror, phone screen on the Mac
   [ -x "$SCRCPY" ] || brew install scrcpy
   echo "=============================================="
   echo " MIRROR MODE (scrcpy): PHONE SCREEN on Mac -> $SERIAL"
-  echo " click=TAP | drag=swipe | right-click=Back (inside mirror)"
+  echo " click=TAP | drag=swipe | wheel=NEXT/PREV | right-click=Back (inside mirror)"
   echo " ANYWHERE: light SHIFT+wheel=NEXT/PREV | SHIFT+mid/right=pause"
   echo " Buffer: video 100ms | audio 100ms (smooth, +100ms delay)"
   echo "=============================================="

@@ -23,8 +23,10 @@ Controls:
   wheel = NEXT/PREV · right-click = Android Back · Space = pause · ↑/↓ = PREV/NEXT
 - Anywhere on the Mac: light **SHIFT+wheel** down = NEXT, up = PREV ·
   **SHIFT+middle-click** (or SHIFT+right-click) = video pause/resume
-- In the scrcpy mirror (the default): click/drag work as touch; plain wheel is
-  disabled there, and SHIFT+click is left to scrcpy so nothing double-taps.
+- In the scrcpy mirror (the default): click/drag work as touch; plain wheel
+  while the cursor is on the mirror screen = NEXT/PREV (SHIFT+wheel keeps
+  working everywhere, unchanged). SHIFT+click is left to scrcpy so nothing
+  double-taps.
 
 ## Setup (one time)
 
