@@ -1,9 +1,9 @@
 #!/bin/bash
-# Reels-Scroll.command - Desktop (shared code in fb-reels-lib.sh). SHIFT + mouse wheel = Reels on TV.
+# Reels-Scroll.command - (shared code in fb-reels-lib.sh). SHIFT + mouse wheel = Reels on TV.
 #   SHIFT + wheel DOWN = NEXT Reel | SHIFT + wheel UP = PREV Reel (works anywhere on Mac)
 #   SHIFT + middle-click (or SHIFT+right-click) = pause/resume VIDEO via tap center (keyevent 85 ignored by FB)
 # Needs ONE-TIME allow: macOS Input Monitoring for Terminal (this file opens it for you).
-DIR="$(cd "$(dirname "$0")" && pwd)"  # wherever this file lives (Desktop today)
+DIR="$(cd "$(dirname "$0")" && pwd)"  # wherever this file lives (~/projects/screen-mirror today)
 LIB="$DIR/fb-reels-lib.sh"
 if [ ! -f "$LIB" ]; then echo "Missing $LIB - keep fb-reels-lib.sh next to this file."; read -p "Press Enter to close: " _; exit 1; fi
 . "$LIB"  # shared: resolve_tools, ensure_pynput, pick_serial, auto_connect, check_trust, connect_phone

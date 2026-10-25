@@ -68,7 +68,7 @@ the `.command` file instead. `Android-Mouse.command` regenerates
 `fb-reels-scroll.py` via `Reels-Scroll.command --test` on every launch too, so
 listener fixes apply to B mode immediately.
 
-Paths are relative to wherever the launchers live (Desktop today), tools are
+Paths are relative to wherever the launchers live (~/projects/screen-mirror), tools are
 found via Homebrew's prefix or `PATH`, and swipe/tap points are computed from
 the phone's real screen size (`adb shell wm size`, exported as
 `PHONE_W`/`PHONE_H`; S25 FE 1080×2340 is the fallback).

@@ -1,4 +1,4 @@
-# Git lives on Desktop, but only tracks the launchers, their shared lib + docs.
+# This repo only tracks the launchers, their shared lib + docs.
 # Ignore everything here...
 *
 # ...except these:

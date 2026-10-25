@@ -1,10 +1,10 @@
 #!/bin/bash
-# Android-Mouse.command - Desktop. DEFAULT (double-click): scrcpy MIRROR.
+# Android-Mouse.command - DEFAULT (double-click): scrcpy MIRROR.
 #   The PHONE SCREEN shows on the Mac. Inside it: click = tap | drag = swipe | wheel = NEXT/PREV | right-click = Back
 #   ANYWHERE: light SHIFT+wheel = NEXT/PREV | SHIFT+middle/right-click = VIDEO pause/resume (listener)
 #   No-screen TV mode from Terminal instead:  ./Android-Mouse.command --pad
 #     (blank phone-shaped PAD, watch the TV - no scrcpy lag, but NO phone screen on the Mac)
-DIR="$(cd "$(dirname "$0")" && pwd)"  # wherever this file lives (Desktop today)
+DIR="$(cd "$(dirname "$0")" && pwd)"  # wherever this file lives (~/projects/screen-mirror today)
 LIB="$DIR/fb-reels-lib.sh"
 if [ ! -f "$LIB" ]; then echo "Missing $LIB - keep fb-reels-lib.sh next to this file."; read -p "Press Enter to close: " _; exit 1; fi
 . "$LIB"  # shared: resolve_tools, ensure_pynput, pick_serial, auto_connect, check_trust, connect_phone
