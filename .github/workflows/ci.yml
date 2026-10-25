@@ -58,12 +58,22 @@ jobs:
           codesign --verify --strict ScreenGood.app
           codesign -dv ScreenGood.app
 
-      - name: Package app bundle
+      - name: Package app bundle (zip)
         run: ditto -c -k --sequesterRsrc --keepParent ScreenGood.app ScreenGood-macOS-arm64.zip
 
-      - name: Upload app artifact
+      - name: Package app bundle (dmg, drag-to-Applications)
+        run: |
+          mkdir -p dmg-stage
+          ditto ScreenGood.app dmg-stage/ScreenGood.app
+          ln -s /Applications dmg-stage/Applications
+          hdiutil create -volname "ScreenGood" -srcfolder dmg-stage -ov -format UDZO ScreenGood-macOS-arm64.dmg
+          hdiutil verify ScreenGood-macOS-arm64.dmg
+
+      - name: Upload app artifacts
         uses: actions/upload-artifact@v4
         with:
           name: ScreenGood-macOS-arm64
-          path: ScreenGood-macOS-arm64.zip
+          path: |
+            ScreenGood-macOS-arm64.zip
+            ScreenGood-macOS-arm64.dmg
           if-no-files-found: error
