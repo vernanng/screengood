@@ -2,7 +2,7 @@
 
 Status: **Final** — grill settled Q1–Q6 as recommended (Q1 amended: no bash); accepted by user via `go` on 2026-10-25. **Scope amendment (same day, user instruction): pad mode removed entirely — mirror is the only screen mode.** Q4 below is superseded; `src/pad.rs`, the `pad` subcommand, `to_phone`, and the `objc2` dependencies were dropped before any pad code landed.
 
-Implementation status: steps 1–4 done and verified (22 unit tests, clippy/fmt clean, binary selftest OK, `ScreenGood.app` codesigned `com.screengood.app`, live USB discovery prints `Phone OK`; old launchers' selftests still pass). Step 5 (cutover deletion) is gated on the Q6 manual parity pass: grant `ScreenGood.app` Input Monitoring + Accessibility once, run one real mirror session, confirm, then delete the three legacy files and rewrite README.
+Implementation status: **complete — all 5 steps landed.** Steps 1–4 in the Rust-stack commit (22 unit tests, clippy/fmt clean, binary selftest OK, `ScreenGood.app` codesigned `com.screengood.app`, live USB discovery prints `Phone OK`). Step 5 cutover unlocked by the user on 2026-10-25: `Android-Mouse.command`, `Reels-Scroll.command`, and `fb-reels-lib.sh` deleted (recoverable from git history), README rewritten for the Rust mirror-only build, `.gitignore` reduced to Rust outputs + the phone-IP file. Remaining manual item: the one-time Input Monitoring + Accessibility grant for `ScreenGood.app`.
 
 ## Goal
 
