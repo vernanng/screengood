@@ -1,8 +1,8 @@
 #!/bin/bash
 # Android-Mouse.command - Desktop. Mac mouse controls Android + ALL Reels-Scroll features, one launcher.
-#   INSIDE mirror window : click=tap (center=pause) | drag=swipe | wheel=NEXT/PREV | right=Back | middle=Home
-#   ANYWHERE (TV, no window focus): SHIFT+wheel=NEXT/PREV | SHIFT+middle/right-click=VIDEO pause/resume
-#   Listener auto-steps-aside while cursor is over mirror window, so actions never fire twice.
+#   INSIDE mirror window : click=tap (center=pause) | drag=swipe | plain wheel=DISABLED | right=Back | middle=Home
+#   ANYWHERE (TV, no window focus): light SHIFT+wheel=NEXT/PREV | SHIFT+middle/right-click=VIDEO pause/resume
+#   Listener handles SHIFT+wheel everywhere; it only steps aside for SHIFT+clicks over the mirror.
 ADB="/opt/homebrew/bin/adb"
 SCRCPY="/opt/homebrew/bin/scrcpy"
 PY="/opt/homebrew/bin/python3"
@@ -37,8 +37,8 @@ export ADB_SERIAL="$SERIAL"
 
 echo "=============================================="
 echo " Android MOUSE + REELS -> $SERIAL"
-echo " INSIDE window : click=TAP | drag=swipe | wheel=NEXT/PREV"
-echo " ANYWHERE      : SHIFT+wheel=NEXT/PREV | SHIFT+mid/right-click=pause"
+echo " INSIDE window : click=TAP | drag=swipe | plain wheel=OFF"
+echo " ANYWHERE      : light SHIFT+wheel=NEXT/PREV | SHIFT+mid/right-click=pause"
 echo " Close the mirror window (or Ctrl+C here) to stop both."
 echo "=============================================="
 
@@ -48,7 +48,7 @@ if [ ! -f "$PYFILE" ] && [ -f "$REELS" ]; then "$REELS" --test >/dev/null 2>&1; 
 if [ -f "$PYFILE" ] && "$PY" -c "import pynput" 2>/dev/null; then
   "$PY" "$PYFILE" &
   LISTENER_PID=$!
-  echo "Reels listener ON (pid $LISTENER_PID) - auto-off while cursor is over the mirror window."
+  echo "Reels listener ON (pid $LISTENER_PID) - SHIFT+wheel works everywhere, incl. over the mirror."
 else
   echo "Reels listener unavailable (helper/pynput missing) - mirror control still works."
 fi
@@ -57,7 +57,7 @@ trap cleanup EXIT INT TERM
 
 # Audio ON: phone audio plays on the Mac via scrcpy (mute the TV if you hear an echo)
 "$SCRCPY" -s "$SERIAL" --stay-awake --max-size 900 \
-  --window-title "Android - click=tap, wheel=NEXT/PREV, SHIFT+click=tap"
+  --window-title "Android - click=tap, light SHIFT+wheel=NEXT/PREV, SHIFT+click=tap"
 RC=$?
 cleanup
 trap - EXIT INT TERM

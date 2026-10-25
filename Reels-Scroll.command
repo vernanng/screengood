@@ -74,7 +74,7 @@ write_python() {
   cat > "$PYFILE" <<'PYEOF'
 #!/opt/homebrew/bin/python3
 """S25 FE Shift+wheel listener. DOWN=NEXT, UP=PREV. No phone touch."""
-import time, subprocess, sys, os
+import time, subprocess, sys, os, threading
 ADB = "/opt/homebrew/bin/adb"
 SERIAL = os.environ.get("ADB_SERIAL", "")
 BASE = [ADB] + (["-s", SERIAL] if SERIAL else []) + ["shell", "input", "swipe"]
@@ -85,22 +85,39 @@ COOLDOWN = 0.9
 INVERT = False
 last_fire = 0.0
 shift_held = False
+PIXEL_THRESHOLD = 6.0  # light scroll: ~6px of wheel movement is enough for NEXT/PREV
+acc_dx = acc_dy = 0.0
+acc_last = 0.0
+_bounds_cache = []
+_bounds_at = 0.0
+_tap = None
 
-def scrcpy_at(x, y):
-    """True when the Mac cursor (x, y) is over the scrcpy mirror window."""
+def scrcpy_bounds():
+    global _bounds_cache, _bounds_at
+    now = time.time()
+    if now - _bounds_at < 0.5:
+        return _bounds_cache
+    _bounds_at = now
     try:
         from Quartz import CGWindowListCopyWindowInfo, kCGWindowListOptionOnScreenOnly, kCGWindowListExcludeDesktopElements, kCGNullWindowID
         wins = CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements, kCGNullWindowID)
+        out = []
         for w in wins:
             if "scrcpy" not in (w.get("kCGWindowOwnerName") or "").lower():
                 continue
             b = w.get("kCGWindowBounds") or {}
-            bx, by = float(b.get("X", 0)), float(b.get("Y", 0))
-            if bx <= x <= bx + float(b.get("Width", 0)) and by <= y <= by + float(b.get("Height", 0)):
-                return True
-        return False
+            out.append((float(b.get("X", 0)), float(b.get("Y", 0)), float(b.get("Width", 0)), float(b.get("Height", 0))))
+        _bounds_cache = out
     except Exception:
-        return False
+        _bounds_cache = []
+    return _bounds_cache
+
+def scrcpy_at(x, y):
+    """True when the Mac cursor (x, y) is over the scrcpy mirror window."""
+    for bx, by, bw, bh in scrcpy_bounds():
+        if bx <= x <= bx + bw and by <= y <= by + bh:
+            return True
+    return False
 
 def decide(dx, dy):
     if abs(dx) < 1e-9 and abs(dy) < 1e-9:
@@ -131,6 +148,44 @@ def selftest():
     sf = scrcpy_at(0, 0)
     print(f"  scrcpy-window detect returns bool [{('PASS' if isinstance(sf, bool) else 'FAIL')}: {sf} at 0,0]", flush=True)
     if not isinstance(sf, bool): ok = False
+    # SHIFT+wheel must fire NEXT even over the mirror: scrcpy makes it a horizontal scroll (Reels ignores it)
+    calls, orig_run, orig_at = [], run_cmd, scrcpy_at
+    globals()['run_cmd'] = lambda c: calls.append(c)
+    globals()['scrcpy_at'] = lambda x, y: True
+    globals()['shift_held'] = True; globals()['last_fire'] = 0.0
+    on_scroll(10, 10, 0, -1)
+    globals()['run_cmd'], globals()['scrcpy_at'] = orig_run, orig_at
+    globals()['shift_held'] = False
+    wok = (calls == [NEXT_CMD])
+    print(f"  SHIFT+wheel over mirror -> NEXT [{('PASS' if wok else 'FAIL')}]", flush=True)
+    if not wok: ok = False
+    # SHIFT+click over the mirror must NOT fire: scrcpy already taps there (else double-tap cancels pause)
+    calls2 = []
+    globals()['run_cmd'] = lambda c: calls2.append(c)
+    globals()['scrcpy_at'] = lambda x, y: True
+    globals()['shift_held'] = True
+    from pynput.mouse import Button as _B
+    on_click(10, 10, _B.middle, True)
+    globals()['run_cmd'], globals()['scrcpy_at'] = orig_run, orig_at
+    globals()['shift_held'] = False
+    cok = (calls2 == [])
+    print(f"  SHIFT+click over mirror -> no double-tap [{('PASS' if cok else 'FAIL')}]", flush=True)
+    if not cok: ok = False
+    # plain wheel over mirror = suppressed (removed); plain wheel elsewhere = passes through
+    globals()['scrcpy_at'] = lambda x, y: True
+    pd1 = wheel_decision(10, 10, False, 0, -10)
+    globals()['scrcpy_at'] = lambda x, y: False
+    pd2 = wheel_decision(10, 10, False, 0, -10)
+    pok = (pd1 == (True, None) and pd2 == (False, None))
+    print(f"  plain wheel mirror=off / elsewhere=on [{('PASS' if pok else 'FAIL')}]", flush=True)
+    if not pok: ok = False
+    # light scroll: three tiny -2px SHIFT+wheel ticks must add up to one NEXT
+    globals()['acc_dx'] = globals()['acc_dy'] = 0.0; globals()['acc_last'] = 0.0
+    acts = [wheel_decision(10, 10, True, 0, -2, now=100.0 + i * 0.05)[1] for i in range(3)]
+    globals()['scrcpy_at'] = orig_at
+    lok = (acts == [None, None, "NEXT"])
+    print(f"  light SHIFT+wheel 3x-2px -> NEXT [{('PASS' if lok else 'FAIL')}: {acts}]", flush=True)
+    if not lok: ok = False
     print("SELFTEST " + ("OK - DOWN=NEXT, UP=PREV" if ok else "FAILED"), flush=True)
     return ok
 
@@ -144,17 +199,91 @@ def run_cmd(cmd):
         print(f"adb error: {e}", flush=True)
         return -1
 
+def fire(action, sync=True):
+    global last_fire
+    now = time.time()
+    if now - last_fire < COOLDOWN: return False
+    last_fire = now
+    print(f"[{time.strftime('%H:%M:%S')}] Shift+wheel -> {action}", flush=True)
+    cmd = NEXT_CMD if action == "NEXT" else PREV_CMD
+    if sync: run_cmd(cmd)
+    else: threading.Thread(target=run_cmd, args=(cmd,), daemon=True).start()
+    return True
+
+def accumulate_pixels(dx, dy, now=None):
+    global acc_dx, acc_dy, acc_last
+    if now is None: now = time.time()
+    if now - acc_last > 0.35: acc_dx = acc_dy = 0.0
+    acc_last = now; acc_dx += dx; acc_dy += dy
+    if max(abs(acc_dx), abs(acc_dy)) < PIXEL_THRESHOLD: return None
+    action = decide(acc_dx, acc_dy); acc_dx = acc_dy = 0.0
+    return action
+
+def wheel_decision(x, y, shift, dx, dy, now=None):
+    """(suppress, action): SHIFT+wheel is ours everywhere (light, pixel-based);
+    plain wheel over the mirror is removed; plain wheel elsewhere passes through."""
+    if shift:
+        return (True, accumulate_pixels(dx, dy, now=now))
+    if scrcpy_at(x, y):
+        return (True, None)
+    return (False, None)
+
+def _quartz_cb(proxy, event_type, event, refcon):
+    try:
+        import Quartz
+        if event_type in (Quartz.kCGEventTapDisabledByTimeout, Quartz.kCGEventTapDisabledByUserInput):
+            if _tap is not None: Quartz.CGEventTapEnable(_tap, True)
+            return event
+        if event_type != Quartz.kCGEventScrollWheel: return event
+        loc = Quartz.CGEventGetLocation(event); x, y = float(loc.x), float(loc.y)
+        shift = bool(Quartz.CGEventGetFlags(event) & Quartz.kCGEventFlagMaskShift)
+        pdx = Quartz.CGEventGetIntegerValueField(event, Quartz.kCGScrollWheelEventPointDeltaAxis2)
+        pdy = Quartz.CGEventGetIntegerValueField(event, Quartz.kCGScrollWheelEventPointDeltaAxis1)
+        if pdx == 0 and pdy == 0:
+            pdx = Quartz.CGEventGetDoubleValueField(event, Quartz.kCGScrollWheelEventFixedPtDeltaAxis2)
+            pdy = Quartz.CGEventGetDoubleValueField(event, Quartz.kCGScrollWheelEventFixedPtDeltaAxis1)
+        suppress, action = wheel_decision(x, y, shift, float(pdx), float(pdy))
+        if action: fire(action, sync=False)
+        return None if suppress else event
+    except Exception:
+        return event
+
+def preload_quartz():
+    """Force PyObjC lazy imports to load single-threaded, before tap+pynput threads race on them."""
+    try:
+        import Quartz
+        for n in ("CGEventGetLocation", "CGEventGetFlags", "CGEventGetIntegerValueField", "CGEventGetDoubleValueField", "CGEventTapEnable", "CGEventTapCreate", "CGEventMaskBit", "CFMachPortCreateRunLoopSource", "CFRunLoopAddSource", "CFRunLoopGetCurrent", "CFRunLoopRun", "CGWindowListCopyWindowInfo"):
+            getattr(Quartz, n, None)
+    except Exception:
+        pass
+
+def start_quartz_tap():
+    preload_quartz()
+    def _run():
+        global _tap
+        try:
+            import Quartz
+            mask = Quartz.CGEventMaskBit(Quartz.kCGEventScrollWheel)
+            _tap = Quartz.CGEventTapCreate(Quartz.kCGSessionEventTap, Quartz.kCGHeadInsertEventTap, Quartz.kCGEventTapOptionDefault, mask, _quartz_cb, None)
+            if not _tap:
+                print("Quartz wheel tap unavailable - fallback to line scroll (allow Accessibility for Terminal)", flush=True); return
+            src = Quartz.CFMachPortCreateRunLoopSource(None, _tap, 0)
+            Quartz.CFRunLoopAddSource(Quartz.CFRunLoopGetCurrent(), src, Quartz.kCFRunLoopCommonModes)
+            Quartz.CGEventTapEnable(_tap, True)
+            print("Wheel tap ON: light SHIFT+wheel = NEXT/PREV | plain wheel over mirror = disabled", flush=True)
+            Quartz.CFRunLoopRun()
+        except Exception as e:
+            print(f"Quartz wheel tap failed ({e}) - fallback to line scroll", flush=True)
+    threading.Thread(target=_run, daemon=True).start()
+
 def on_scroll(x, y, dx, dy):
     global last_fire
     if not shift_held: return
-    if scrcpy_at(x, y): return  # cursor over mirror: scrcpy forwards wheel itself, else double-NEXT
-    now = time.time()
-    if now - last_fire < COOLDOWN: return
+    # Fallback path (line deltas). Quartz tap above handles light/pixel scrolls and
+    # suppresses these events when it is active; shared cooldown prevents double-fire.
     action = decide(dx, dy)
     if action is None: return
-    last_fire = now
-    print(f"[{time.strftime('%H:%M:%S')}] Shift+wheel -> {action}", flush=True)
-    run_cmd(NEXT_CMD if action == "NEXT" else PREV_CMD)
+    fire(action)
 
 def on_press(key):
     global shift_held
@@ -210,7 +339,8 @@ if __name__ == "__main__":
         kl.join(); ml.join()
         sys.exit(0)
     from pynput import mouse, keyboard
-    print("Hold SHIFT + wheel DOWN = NEXT | UP = PREV | SHIFT+middle-click (or SHIFT+right-click) = VIDEO pause/resume. Ctrl+C stops.", flush=True)
+    print("Hold SHIFT + wheel DOWN = NEXT | UP = PREV (light scroll ok) | SHIFT+middle-click (or SHIFT+right-click) = VIDEO pause/resume. Plain wheel over mirror is disabled. Ctrl+C stops.", flush=True)
+    start_quartz_tap()
     kl = keyboard.Listener(on_press=on_press, on_release=on_release)
     ml = mouse.Listener(on_scroll=on_scroll, on_click=on_click)
     kl.start(); ml.start()
