@@ -53,8 +53,12 @@ Controls:
 
 ## Where the code lives — read this before editing
 
-**The two `.command` files are the source of truth and the only code in git.**
-Each embeds its Python helper in a heredoc and rewrites it on every run:
+**The two `.command` launchers plus `fb-reels-lib.sh` are the source of truth
+and the only code in git.** Shared bash — tool resolution, phone
+discovery/connection (`connect_phone`, USB preferred), the permission probe,
+and the `pynput` bootstrap — lives once in `fb-reels-lib.sh`, which both
+launchers source; keep all three files together. Each launcher embeds its
+Python helper in a heredoc and rewrites it on every run:
 
 - `Reels-Scroll.command` (`write_python`) → `fb-reels-scroll.py`
 - `Android-Mouse.command` (`write_pad`) → `fb-reels-pad.py`

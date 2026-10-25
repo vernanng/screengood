@@ -5,106 +5,18 @@
 #   No-screen TV mode from Terminal instead:  ./Android-Mouse.command --pad
 #     (blank phone-shaped PAD, watch the TV - no scrcpy lag, but NO phone screen on the Mac)
 DIR="$(cd "$(dirname "$0")" && pwd)"  # wherever this file lives (Desktop today)
-if command -v brew >/dev/null 2>&1; then BREW_BIN="$(brew --prefix)/bin"
-elif [ -x /opt/homebrew/bin/adb ]; then BREW_BIN="/opt/homebrew/bin"
-else BREW_BIN="/usr/local/bin"; fi
-ADB="$BREW_BIN/adb"; [ -x "$ADB" ] || ADB="$(command -v adb || echo "$BREW_BIN/adb")"
-SCRCPY="$BREW_BIN/scrcpy"; [ -x "$SCRCPY" ] || SCRCPY="$(command -v scrcpy || echo "$BREW_BIN/scrcpy")"
-PY="$BREW_BIN/python3"; [ -x "$PY" ] || PY="$(command -v python3 || echo "$BREW_BIN/python3")"
+LIB="$DIR/fb-reels-lib.sh"
+if [ ! -f "$LIB" ]; then echo "Missing $LIB - keep fb-reels-lib.sh next to this file."; read -p "Press Enter to close: " _; exit 1; fi
+. "$LIB"  # shared: resolve_tools, ensure_pynput, pick_serial, auto_connect, check_trust, connect_phone
+resolve_tools
 IPFILE="$DIR/fb-reels-tv-ip.txt"
 PYFILE="$DIR/fb-reels-scroll.py"
 PADFILE="$DIR/fb-reels-pad.py"
 REELS="$DIR/Reels-Scroll.command"
-export ADB_BIN="$ADB"  # helper .py files use the same adb
-export PATH="$BREW_BIN:/opt/homebrew/bin:/usr/local/bin:$PATH"
 cd "$HOME" || exit 1
 
 [ -x "$ADB" ] || brew install android-platform-tools
 [ -x "$PY" ] || brew install python
-
-ensure_pynput() {  # system python if pynput already there, else project .venv (never --break-system-packages)
-  "$PY" -c "import pynput" 2>/dev/null && return 0
-  [ -x "$DIR/.venv/bin/python" ] || "$PY" -m venv --system-site-packages "$DIR/.venv" || return 1
-  "$DIR/.venv/bin/python" -m pip install -q pynput 2>/dev/null
-  if "$DIR/.venv/bin/python" -c "import pynput" 2>/dev/null; then PY="$DIR/.venv/bin/python"; else return 1; fi
-}
-
-pick_serial() {
-  local d
-  d=$("$ADB" devices 2>/dev/null | awk -F'\t' '$2=="device"{print $1}')
-  SERIAL=$(printf '%s\n' "$d" | grep -vE '^[0-9.]+:[0-9]+$' | grep -v '_tcp$' | head -n 1)  # USB cable first: lowest delay
-  [ -z "$SERIAL" ] && SERIAL=$(printf '%s\n' "$d" | grep -E '^[0-9.]+:[0-9]+$' | head -n 1)
-  [ -z "$SERIAL" ] && SERIAL=$(printf '%s\n' "$d" | head -n 1)
-}
-
-# --- phone discovery, same as Reels-Scroll.command (saved IP, then mDNS) ---
-is_connected() { "$ADB" devices 2>/dev/null | grep -q $'\tdevice$'; }
-
-resolve_ip() {  # $1 = hostname -> IPv4 (adb can't use .local names)
-  local h="${1%.}" f=/tmp/adb-g.txt
-  rm -f "$f"
-  dns-sd -G v4 "$h" >"$f" 2>&1 &
-  local pid=$!
-  sleep 4
-  kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
-  grep -ao '[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*' "$f" 2>/dev/null | head -n 1
-  rm -f "$f"
-}
-
-auto_connect() {
-  is_connected && return 0
-  "$ADB" disconnect >/dev/null 2>&1
-  "$ADB" kill-server >/dev/null 2>&1
-  sleep 1
-  "$ADB" start-server >/dev/null 2>&1
-  for _ in 1 2 3; do
-    is_connected && return 0
-    sleep 2
-  done
-  if [ -n "$SAVED_IP" ]; then
-    "$ADB" connect "$SAVED_IP" >/dev/null 2>&1; sleep 2
-    is_connected && return 0
-  fi
-  rm -f /tmp/adb-browse.txt
-  dns-sd -B _adb-tls-connect._tcp local >/tmp/adb-browse.txt 2>&1 &
-  BPID=$!
-  sleep 6
-  kill $BPID 2>/dev/null; wait $BPID 2>/dev/null
-  INSTANCES=$(awk '/Add/ {print $NF}' /tmp/adb-browse.txt 2>/dev/null | sort -u)
-  rm -f /tmp/adb-browse.txt
-  for inst in $INSTANCES; do
-    rm -f /tmp/adb-lookup.txt
-    dns-sd -L "$inst" _adb-tls-connect._tcp local >/tmp/adb-lookup.txt 2>&1 &
-    LPID=$!
-    sleep 4
-    kill $LPID 2>/dev/null; wait $LPID 2>/dev/null
-    HP=$(sed -n 's/.*can be reached at \([^ :]*\)\.*:\([0-9]*\).*/\1:\2/p' /tmp/adb-lookup.txt | head -n 1 | tr -d ' ')
-    rm -f /tmp/adb-lookup.txt
-    [ -z "$HP" ] && continue
-    HP=${HP/.local.:/.local:}
-    HOST=${HP%:*}; PORT=${HP##*:}
-    IP=$(resolve_ip "$HOST")
-    [ -n "$IP" ] && HP="$IP:$PORT"
-    echo "Found $inst -> $HP, connecting..."
-    "$ADB" connect "$HP" >/dev/null 2>&1; sleep 2
-    if is_connected; then echo "$HP" > "$IPFILE"; SAVED_IP="$HP"; return 0; fi
-  done
-  return 1
-}
-
-check_trust() {  # 0 = Input Monitoring allowed, 1 = blocked by macOS (pad still works)
-  OUT=$("$PY" -c '
-from pynput import mouse, keyboard
-import time
-m = mouse.Listener(on_scroll=lambda x,y,dx,dy: None)
-k = keyboard.Listener(on_press=lambda key: None)
-m.start(); k.start()
-time.sleep(2)
-m.stop(); k.stop()
-print("PROBE_DONE")' 2>&1)
-  echo "$OUT" | grep -qi "not trusted" && return 1
-  echo "$OUT" | grep -q PROBE_DONE
-}
 
 write_pad() {
   cat > "$PADFILE" <<'PYEOF'
@@ -278,23 +190,13 @@ PYEOF
 }
 
 if [ "$1" = "--test" ]; then
-  echo "=== REVIEW (one file, pad auto-written to $PADFILE) ==="
+  echo "=== REVIEW (pad auto-written to $PADFILE) ==="
   write_pad
   "$PY" "$PADFILE" --test
   exit $?
 fi
 
-[ -f "$IPFILE" ] && SAVED_IP=$(cat "$IPFILE") || SAVED_IP=""
-auto_connect
-while ! is_connected; do
-  echo "Phone not found. Same WiFi as Mac + Wireless debugging ON on S25 FE."
-  read -p "Press ENTER to search again: " _
-  auto_connect
-done
-pick_serial
-export ADB_SERIAL="$SERIAL"
-SIZE=$("$ADB" -s "$SERIAL" shell wm size 2>/dev/null | grep -o '[0-9]*x[0-9]*' | head -n 1)
-case "$SIZE" in *x*) export PHONE_W="${SIZE%x*}" PHONE_H="${SIZE#*x}" ;; esac
+connect_phone
 "$ADB" -s "$SERIAL" shell input keyevent 224 >/dev/null 2>&1  # wake phone screen
 
 # --- Reels-Scroll features: SHIFT+wheel / SHIFT+click listener, in background ---
