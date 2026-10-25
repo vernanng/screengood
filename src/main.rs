@@ -1,5 +1,5 @@
-//! screengood — control Facebook Reels on an Android phone from a Mac
-//! mouse (Rust port of Android-Mouse.command + Reels-Scroll.command).
+//! screengood — mirror an Android phone inside a Mac window and control
+//! the entire phone with the Mac mouse (Wi-Fi or USB-C).
 //!
 //! Subcommands: `mirror` (default, scrcpy + listener), `listen`,
 //! `test`, `click-probe`, `make-app`. Legacy `--mirror`/`--test`/
@@ -201,7 +201,7 @@ fn run_listener_mode(probe: bool) -> i32 {
         return 0;
     }
     println!("==============================================");
-    println!(" Reels SHIFT + WHEEL -> Samsung TV");
+    println!(" SHIFT + WHEEL -> Android control");
     println!(
         " SHIFT + wheel DOWN = NEXT | UP = PREV | SHIFT + middle/right-click = VIDEO pause/resume"
     );

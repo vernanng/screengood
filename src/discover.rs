@@ -1,4 +1,4 @@
-//! Tool resolution + phone discovery, ported from `fb-reels-lib.sh`
+//! Tool resolution + phone discovery, ported from the legacy shared shell lib
 //! (`resolve_tools`, `pick_serial`, `auto_connect`, `detect_phone_size`,
 //! `connect_phone`). mDNS browsing uses the `mdns-sd` crate instead of
 //! backgrounding `dns-sd` and parsing temp files.
@@ -141,7 +141,7 @@ pub fn is_usb_serial(serial: &str) -> bool {
     !serial.contains(':') && !serial.ends_with("_tcp")
 }
 
-/// Directory holding `fb-reels-tv-ip.txt`: the folder the user launched
+/// Directory holding `phone-ip.txt`: the folder the user launched
 /// from. `ScreenGood.app/Contents/MacOS/screengood` -> the app's folder;
 /// `target/<profile>/screengood` -> the repo root; else the exe's folder.
 /// `SCREENGOOD_DIR` overrides everything.
@@ -223,7 +223,7 @@ fn auto_connect(bare: &Adb) -> bool {
         }
         std::thread::sleep(Duration::from_secs(2));
     }
-    let ipfile = project_dir().join("fb-reels-tv-ip.txt");
+    let ipfile = project_dir().join("phone-ip.txt");
     let saved_ip = std::fs::read_to_string(&ipfile)
         .map(|s| s.trim().to_string())
         .unwrap_or_default();

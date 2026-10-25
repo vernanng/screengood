@@ -1,5 +1,5 @@
-//! Global SHIFT+wheel / SHIFT+click listener: a 1:1 port of the Quartz
-//! `CGEventTap` in `fb-reels-scroll.py` (plan Q3: direct tap via
+//! Global SHIFT+wheel / SHIFT+click listener: a 1:1 port of the legacy
+//! Quartz `CGEventTap` helper (plan Q3: direct tap via
 //! `core-graphics`). One tap sees scroll + mouse-down events; the SHIFT
 //! state comes from each event's flags, so no separate keyboard listener.
 
@@ -192,7 +192,7 @@ pub fn scrcpy_at(x: f64, y: f64) -> bool {
         .any(|bounds| point_in_bounds(x, y, bounds))
 }
 
-/// Normalize every wheel source before the one shared reel-step path.
+/// Normalize every wheel source before the one shared scroll-step path.
 /// Discrete mice may report only line deltas; scale one line to the exact
 /// pixel threshold so one notch becomes one NEXT/PREV step.
 fn scroll_deltas(

@@ -61,7 +61,7 @@ impl Adb {
         self.input_cmd(&["tap", &x.to_string(), &y.to_string()])
     }
 
-    /// Tap center = Reels video pause/resume (keyevent 85 is ignored by FB).
+    /// Tap the center of the phone screen.
     pub fn video_cmd(&self, geo: Geometry) -> Vec<String> {
         self.tap_cmd(geo.cx, geo.tap_y)
     }

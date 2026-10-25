@@ -1,6 +1,5 @@
-//! Pure decision logic ported 1:1 from the Python helpers embedded in
-//! `Reels-Scroll.command` (`decide`, `accumulate_pixels`, `wheel_decision`,
-//! swipe-point scaling).
+//! Pure decision logic ported 1:1 from the legacy Python helpers
+//! (`decide`, `accumulate_pixels`, `wheel_decision`, swipe-point scaling).
 //! No FFI and no I/O here; everything is unit-testable.
 
 use std::time::{Duration, Instant};
