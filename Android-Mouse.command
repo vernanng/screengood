@@ -32,7 +32,8 @@ ensure_pynput() {  # system python if pynput already there, else project .venv (
 pick_serial() {
   local d
   d=$("$ADB" devices 2>/dev/null | awk -F'\t' '$2=="device"{print $1}')
-  SERIAL=$(printf '%s\n' "$d" | grep -E '^[0-9.]+:[0-9]+$' | head -n 1)
+  SERIAL=$(printf '%s\n' "$d" | grep -vE '^[0-9.]+:[0-9]+$' | grep -v '_tcp$' | head -n 1)  # USB cable first: lowest delay
+  [ -z "$SERIAL" ] && SERIAL=$(printf '%s\n' "$d" | grep -E '^[0-9.]+:[0-9]+$' | head -n 1)
   [ -z "$SERIAL" ] && SERIAL=$(printf '%s\n' "$d" | head -n 1)
 }
 
@@ -333,13 +334,21 @@ if [ "$1" = "--pad" ]; then
   RC=$?
 else  # default, incl. explicit --mirror: scrcpy mirror, phone screen on the Mac
   [ -x "$SCRCPY" ] || brew install scrcpy
+  case "$SERIAL" in
+    *:*|*_tcp)  # WiFi transport: proven smooth profile, buffers absorb jitter
+      PROFILE="WiFi smooth: 414x900 H.264 | buffer video/audio 100ms"
+      SCRCPY_PROFILE=(--max-size 900 --video-buffer=100 --audio-buffer=100) ;;
+    *)          # USB cable: PERFECT near-zero delay - quality traded down on purpose (small frames encode/decode fastest, fps uncapped)
+      PROFILE="USB near-zero: 414x900 H.264 8M fps-uncapped | video buffer 0 | raw audio buffer 30ms"
+      SCRCPY_PROFILE=(--max-size 900 --video-codec=h264 --video-bit-rate=8M --video-buffer=0 --audio-codec=raw --audio-buffer=30 --render-driver=metal) ;;
+  esac
   echo "=============================================="
   echo " MIRROR MODE (scrcpy): PHONE SCREEN on Mac -> $SERIAL"
   echo " click=TAP | drag=swipe | wheel=NEXT/PREV | right-click=Back (inside mirror)"
   echo " ANYWHERE: light SHIFT+wheel=NEXT/PREV | SHIFT+mid/right=pause"
-  echo " Buffer: video 100ms | audio 100ms (smooth, +100ms delay)"
+  echo " Profile: $PROFILE"
   echo "=============================================="
-  "$SCRCPY" -s "$SERIAL" --stay-awake --max-size 900 --video-buffer=100 --audio-buffer=100 \
+  "$SCRCPY" -s "$SERIAL" --stay-awake "${SCRCPY_PROFILE[@]}" \
     --window-title "Android - click=tap, light SHIFT+wheel=NEXT/PREV, SHIFT+click=tap"
   RC=$?
 fi

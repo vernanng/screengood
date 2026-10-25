@@ -10,9 +10,14 @@ Double-click a launcher (or run it from Terminal):
 
 - `Android-Mouse.command` — main launcher. **Double-click = scrcpy mirror:**
   the phone screen shows on the Mac and mouse click = tap
-  (`--mirror` is an explicit alias for this default). The mirror runs with a
-  100 ms video + 100 ms audio buffer ("100 buffer video audio"): smoother
-  playback and no crackle, at the cost of ~100 ms extra delay. From Terminal,
+  (`--mirror` is an explicit alias for this default). The mirror profile is
+  picked by transport (cable is preferred whenever present): **USB =
+  near-zero delay** — quality traded down on purpose: 414×900 H.264 at
+  8 Mbps, fps uncapped, video buffer 0, raw audio with a 30 ms buffer
+  (small frames are the fastest the S25 FE can encode and the Mac can
+  decode; sustained full frame rate with headroom to spare).
+  **WiFi = the previous "100 buffer video audio" smooth profile** —
+  414×900 with 100 ms video/audio buffers, kept for jitter absorption. From Terminal,
   `./Android-Mouse.command --pad` uses the no-screen TV mode instead: a blank
   phone-shaped pad window, watch the TV, no scrcpy lag, sound from the TV.
 - `Reels-Scroll.command` — listener only, no pad/mirror.

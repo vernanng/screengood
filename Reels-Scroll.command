@@ -37,7 +37,8 @@ resolve_ip() {  # $1 = hostname -> IPv4 (adb can't use .local names)
 pick_serial() {  # pin one transport so commands never hit "more than one device"
   local d
   d=$("$ADB" devices 2>/dev/null | awk -F'\t' '$2=="device"{print $1}')
-  SERIAL=$(printf '%s\n' "$d" | grep -E '^[0-9.]+:[0-9]+$' | head -n 1)
+  SERIAL=$(printf '%s\n' "$d" | grep -vE '^[0-9.]+:[0-9]+$' | grep -v '_tcp$' | head -n 1)  # USB cable first: lowest delay
+  [ -z "$SERIAL" ] && SERIAL=$(printf '%s\n' "$d" | grep -E '^[0-9.]+:[0-9]+$' | head -n 1)
   [ -z "$SERIAL" ] && SERIAL=$(printf '%s\n' "$d" | head -n 1)
 }
 
