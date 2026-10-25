@@ -27,8 +27,14 @@ docs and code general-purpose — never reintroduce app-specific wording
   + /Applications symlink> -format UDZO` (verify with `hdiutil verify`
   and a mount + `codesign --verify` before upload); publish/update with
   `gh release` on `vernanng/screengood`.
+- `./target/release/screengood setup-signing` — one-time, user-run:
+  creates the free `ScreenGood Local Signing` identity in a dedicated
+  keychain file under `~/Library/Application Support/ScreenGood/` (login
+  keychain never touched) so grants survive rebuilds. Never auto-run it:
+  trusting the cert pops a macOS password dialog only the user can answer.
 - Subcommands: `mirror` (default), `listen`, `test`, `wheel-probe`,
-  `click-probe`, `make-app`, `install`. No bash anywhere in the product.
+  `click-probe`, `make-app`, `install`, `setup-signing`. No bash anywhere
+  in the product.
 
 ## CI & releases
 
@@ -52,7 +58,8 @@ docs and code general-purpose — never reintroduce app-specific wording
   check-then-request, `kill_previous_instances` (single instance by
   replacement), `child_env_path`, `redirect_output_to_log_if_gui`,
   `assemble_app`/`sign_app` shared bundle assembly (`make_app` with file
-  icon, `install_app` with embedded icon), selftest.
+  icon, `install_app` with embedded icon, `resolve_sign_mode` picking
+  the `setup_signing` local identity when present), selftest.
 - `src/listener.rs` — `CGEventTap` via `core-graphics`; `check_permissions`
   (silent preflight), `request_permissions` (missing only), `scrcpy_at`
   mirror-window detection, lifetime `run`/`spawn`.
@@ -86,15 +93,21 @@ docs and code general-purpose — never reintroduce app-specific wording
 - **Check before asking for permissions.** Preflight Accessibility and
   Input Monitoring separately on every launch; request/open a Settings
   pane only for one that is missing; never re-request a granted one.
-- **Ad-hoc signing is deliberate** (no keychain identity). TCC therefore
-  keys grants to the build's code hash: after a rebuild that changes code,
-  Settings can show "on" while preflight still fails ("Failed to match
-  existing code requirement" in the unified log). Recovery:
-  `tccutil reset Accessibility com.screengood.app` and
+- **Signing is local: ad-hoc by default, stable after `setup-signing`.**
+  With ad-hoc signing TCC keys grants to the build's code hash: after a
+  rebuild that changes code, Settings can show "on" while preflight still
+  fails ("Failed to match existing code requirement" in the unified
+  log). Recovery: `tccutil reset Accessibility com.screengood.app` and
   `tccutil reset ListenEvent com.screengood.app`, relaunch, toggle once.
-  Downloaded releases do not rebuild, so this is one-time setup there.
-  Cargo-installed users likewise grant once for their own local build
-  (each rebuild is a new code hash).
+  Downloaded releases never rebuild, so this is one-time setup there. The
+  permanent fix for source installs is the `ScreenGood Local Signing`
+  identity from `screengood setup-signing` (dedicated keychain file under
+  `~/Library/Application Support/ScreenGood/`; the login keychain is
+  never used, and the identity is never created silently — trusting the
+  cert needs the user's password dialog). Once present, every build is
+  signed with it and grants survive rebuilds. Never make identity
+  creation automatic, and never fall back to ad-hoc silently when the
+  identity exists but signing fails.
 - **Finder PATH has no Homebrew.** `scrcpy` spawns `adb` by bare name; the
   child must get `ADB=<absolute adb>` plus a Homebrew-prefixed `PATH`
   (`child_env_path`). `open` from a terminal forwards the shell PATH and

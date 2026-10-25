@@ -73,7 +73,7 @@ This warning is expected for the GitHub download. It does not mean malware
 was found. It means the app has no Apple Developer ID signature and no
 notarization, so macOS cannot verify the publisher. Removing the warning
 for everyone would require an Apple Developer ID and notarization. This
-project deliberately ships ad-hoc signed instead (no keychain identity).
+project deliberately ships the download ad-hoc signed instead (no Apple Developer ID). Building locally avoids this warning entirely — see the Cargo install option above.
 
 Allow this one copy, once, either way:
 
@@ -192,10 +192,30 @@ grants; only the wheel NEXT/PREV controls need them.
 
 Two things worth knowing:
 
-- The app is ad-hoc signed, so macOS ties grants to the exact build. A
-  *downloaded release never rebuilds*, so this is a one-time setup there.
-  If you rebuild from source with `make-app`, grant both permissions once
-  more for the new build.
+- By default the app is ad-hoc signed, so macOS ties grants to the exact
+  build. A *downloaded release never rebuilds*, so this is a one-time
+  setup there. If you rebuild from source with `make-app`, grant both
+  permissions once more for the new build — **unless** you do the
+  one-time stable-signing setup below.
+- **Never re-grant after rebuilds (recommended for source installs):** run
+  once, in a terminal:
+
+  ```sh
+  screengood setup-signing
+  ```
+
+  This creates a free self-signed identity (“ScreenGood Local Signing”)
+  in a dedicated keychain file under
+  `~/Library/Application Support/ScreenGood/` — your login keychain is
+  never used. macOS asks for your login password once to trust the
+  certificate; type it and allow. From then on every `make-app` /
+  `install` build is signed with that identity, so the permission grants
+  survive every rebuild. Grant both permissions one last time after
+  installing the stable-signed build, then never again.
+  To undo: first remove the trust entry with
+  `security remove-trusted-cert ~/Library/Application\ Support/ScreenGood/signing-cert.pem`,
+  then delete the support folder. Later ad-hoc builds need fresh grants
+  again.
 - After a rebuild the Settings rows can show **on** yet not take effect
   (the saved grant belongs to the previous build's code hash). Fix it by
   clearing the stale entries, then reopening the app so it re-registers:
@@ -223,7 +243,7 @@ Requires a Rust toolchain (pinned by `rust-toolchain.toml`: stable with
 
 ```sh
 cargo build --release
-./target/release/screengood make-app   # assembles + ad-hoc signs ScreenGood.app
+./target/release/screengood make-app   # assembles + signs ScreenGood.app
 open ScreenGood.app
 ```
 
@@ -256,22 +276,24 @@ hdiutil create -volname "ScreenGood" -srcfolder dmg-stage -ov -format UDZO Scree
 ./target/release/screengood test         # built-in selftest; no phone needed
 ./target/release/screengood wheel-probe  # 20 s raw wheel/click event log (diagnostics)
 ./target/release/screengood click-probe  # click-focused probe alias
-./target/release/screengood make-app     # assemble + ad-hoc sign ScreenGood.app
+./target/release/screengood make-app     # assemble + sign ScreenGood.app
 ./target/release/screengood install      # install the app bundle into /Applications (or ~/Applications)
+./target/release/screengood setup-signing # one-time stable local signing (grants survive rebuilds)
 ```
 
 Tests and checks (no phone needed):
 
 ```sh
-cargo test                        # 32 unit tests
+cargo test                        # 35 unit tests
 cargo clippy -- -D warnings
 cargo fmt --check
 ./target/release/screengood test  # prints SELFTEST OK - DOWN=NEXT, UP=PREV
 ```
 
-`make-app` signs ad hoc (`codesign --sign -`, identifier
-`com.screengood.app`) and bundles `assets/AppIcon.icns` when present. No
-keychain signing identity is used. The plist version always follows
+`make-app` and `install` sign with the `setup-signing` local identity
+when it exists (identifier `com.screengood.app`), otherwise ad hoc
+(`codesign --sign -`), and bundle `assets/AppIcon.icns` when present.
+The plist version always follows
 `Cargo.toml` (`env!("CARGO_PKG_VERSION")`), so only one place sets the
 version.
 
@@ -282,7 +304,7 @@ version.
 
 | File | Role |
 |---|---|
-| `src/main.rs` | Commands and app flow: mirror profiles, permission check-then-request, single-instance replacement, GUI log redirect, `make-app`, selftest |
+| `src/main.rs` | Commands and app flow: mirror profiles, permission check-then-request, single-instance replacement, GUI log redirect, `make-app`/`install`/`setup-signing`, selftest |
 | `src/discover.rs` | Phone discovery: USB-first, saved Wi-Fi address (`phone-ip.txt`), mDNS `_adb-tls-connect._tcp.local.`, real screen size via `wm size` |
 | `src/listener.rs` | Direct `CGEventTap` (via `core-graphics`): wheel/click handling, mirror-window detection, consumed-event suppression, tap auto-recovery, permission preflight/request |
 | `src/logic.rs` | Pure decisions: NEXT/PREV mapping, light-scroll pixel accumulation (6 px step), 900 ms cooldown, swipe geometry, 400 ms swipe duration |

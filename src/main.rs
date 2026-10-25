@@ -2,7 +2,7 @@
 //! the entire phone with the Mac mouse (Wi-Fi or USB-C).
 //!
 //! Subcommands: `mirror` (default, scrcpy + listener), `listen`,
-//! `test`, `click-probe`, `make-app`, `install`. Legacy `--mirror`/
+//! `test`, `click-probe`, `make-app`, `install`, `setup-signing`. Legacy `--mirror`/
 //! `--test`/`--click-probe` flags are accepted as aliases. Mirror is the
 //! only screen mode (pad mode was removed by user decision, 2026-10-25).
 
@@ -70,12 +70,13 @@ fn main() {
         "test" | "--test" => run_test(),
         "make-app" => make_app(),
         "install" => install_app(),
+        "setup-signing" => setup_signing(),
         "listen" | "click-probe" | "--click-probe" | "wheel-probe" | "--wheel-probe" => {
             run_listener_mode(mode != "listen")
         }
         "mirror" | "--mirror" => run_mirror_mode(),
         other => {
-            eprintln!("unknown mode: {other}\nusage: screengood [mirror|listen|test|click-probe|wheel-probe|make-app|install]");
+            eprintln!("unknown mode: {other}\nusage: screengood [mirror|listen|test|click-probe|wheel-probe|make-app|install|setup-signing]");
             2
         }
     };
@@ -441,11 +442,10 @@ fn run_mirror_mode() -> i32 {
 }
 
 /// Assemble `ScreenGood.app` next to the project dir: copy this binary in,
-/// write Info.plist, ad-hoc codesign. No keychain signing identity is
-/// used, so TCC keys the app by code hash; the stable preflight-only
-/// permission flow (see `spawn_listener_if_allowed`) keeps launches
-/// silent once granted, and grants are re-given after a rebuild only
-/// when a preflight actually fails.
+/// write Info.plist, then codesign (see `sign_app`/`SignMode`): with the
+/// `setup-signing` local identity when present, so permission grants
+/// survive rebuilds, else ad-hoc. The check-then-request permission flow
+/// (see `spawn_listener_if_allowed`) stays silent once granted.
 fn make_app() -> i32 {
     let dir = discover::project_dir();
     let app = dir.join("ScreenGood.app");
@@ -520,9 +520,9 @@ fn finish_app(app: &Path, icon: Option<&[u8]>, cmd: &str) -> i32 {
         return 1;
     }
     match sign_app(app) {
-        Ok(()) => {
+        Ok(how) => {
             println!(
-                "ScreenGood.app ready at {} (double-click = mirror)",
+                "ScreenGood.app ready at {} (double-click = mirror)\nSigning: {how}",
                 app.display()
             );
             0
@@ -575,22 +575,403 @@ fn plist_body(version: &str, icon_key: &str) -> String {
     )
 }
 
-fn sign_app(app: &Path) -> Result<(), String> {
-    let app_str = app.to_str().unwrap_or_default();
-    match Command::new("codesign")
-        .args([
-            "--force",
-            "--sign",
-            "-",
-            "--identifier",
-            "com.screengood.app",
-            app_str,
-        ])
-        .status()
-    {
+fn sign_app(app: &Path) -> Result<String, String> {
+    let app_str = app.to_str().unwrap_or_default().to_string();
+    let mode = resolve_sign_mode();
+    match run_codesign(&codesign_args(&mode, &app_str)) {
+        Ok(()) => Ok(mode.describe().to_string()),
+        Err(e) if !matches!(mode, SignMode::AdHoc) => {
+            // A broken/locked identity must not brick installs, but falling
+            // back silently would revive per-rebuild permission prompts.
+            eprintln!(
+                "warning: signing with {SIGN_CN} failed ({e}); falling back to \
+                 ad-hoc. Fix with `screengood setup-signing`, or this build \
+                 will ask for permissions again after the next rebuild."
+            );
+            run_codesign(&codesign_args(&SignMode::AdHoc, &app_str))?;
+            Ok(SignMode::AdHoc.describe().to_string())
+        }
+        Err(e) => Err(e),
+    }
+}
+
+fn run_codesign(args: &[String]) -> Result<(), String> {
+    match Command::new("codesign").args(args).status() {
         Ok(s) if s.success() => Ok(()),
         Ok(s) => Err(format!("codesign failed: {s}")),
         Err(e) => Err(format!("codesign: {e}")),
+    }
+}
+
+/// How the app gets signed. Ad-hoc is the zero-setup default; its TCC
+/// designated requirement is the build's own code hash, so every rebuild
+/// needs fresh permission grants. `LocalIdentity` is a self-signed
+/// certificate in a dedicated keychain file (login keychain untouched);
+/// its designated requirement (`identifier + certificate leaf`) is the
+/// same for every build, so grants survive rebuilds. Created once via
+/// `screengood setup-signing`; never auto-created silently.
+#[derive(Debug, PartialEq)]
+enum SignMode {
+    AdHoc,
+    LocalIdentity { hash: String, keychain: String },
+}
+
+impl SignMode {
+    fn describe(&self) -> &'static str {
+        match self {
+            SignMode::AdHoc => "ad-hoc signed (grant permissions again after each rebuild; run `screengood setup-signing` for one-time setup)",
+            SignMode::LocalIdentity { .. } => {
+                "signed with ScreenGood Local Signing (permission grants survive rebuilds)"
+            }
+        }
+    }
+}
+
+fn codesign_args(mode: &SignMode, app_str: &str) -> Vec<String> {
+    let mut args: Vec<String> = Vec::new();
+    match mode {
+        SignMode::LocalIdentity { hash, keychain } => {
+            args.push("--keychain".into());
+            args.push(keychain.clone());
+            args.push("--force".into());
+            args.push("--sign".into());
+            args.push(hash.clone());
+        }
+        SignMode::AdHoc => {
+            args.push("--force".into());
+            args.push("--sign".into());
+            args.push("-".into());
+        }
+    }
+    args.push("--identifier".into());
+    args.push("com.screengood.app".into());
+    args.push(app_str.to_string());
+    args
+}
+
+const SIGN_CN: &str = "ScreenGood Local Signing";
+
+/// All signing material lives under
+/// `~/Library/Application Support/ScreenGood/`: a dedicated keychain file
+/// (never the login keychain), its password file (0600), and the public
+/// certificate (kept so trust can be removed later).
+fn signing_dir() -> PathBuf {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("Library/Application Support/ScreenGood")
+}
+
+struct SigningPaths {
+    keychain: PathBuf,
+    password_file: PathBuf,
+    cert: PathBuf,
+}
+
+fn signing_paths(dir: &Path) -> SigningPaths {
+    SigningPaths {
+        keychain: dir.join("Signing.keychain-db"),
+        password_file: dir.join("keychain-password.txt"),
+        cert: dir.join("signing-cert.pem"),
+    }
+}
+
+/// Find `<40-hex>` for `cn` in `security find-identity -v` output. Lines
+/// look like `  1) C87B.. "ScreenGood Local Signing"`.
+fn find_sign_identity(output: &str, cn: &str) -> Option<String> {
+    for line in output.lines() {
+        let Some(name_start) = line.find('"') else {
+            continue;
+        };
+        let Some(name_end) = line[name_start + 1..].find('"') else {
+            continue;
+        };
+        let name_end = name_start + 1 + name_end;
+        if &line[name_start + 1..name_end] != cn {
+            continue;
+        }
+        if let Some(hash) = line[..name_start]
+            .split_whitespace()
+            .find(|t| t.len() == 40 && t.chars().all(|c| c.is_ascii_hexdigit()))
+        {
+            return Some(hash.to_string());
+        }
+    }
+    None
+}
+
+fn read_keychain_password(paths: &SigningPaths) -> Option<String> {
+    std::fs::read_to_string(&paths.password_file)
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+fn resolve_sign_mode() -> SignMode {
+    let paths = signing_paths(&signing_dir());
+    if !paths.keychain.exists() {
+        return SignMode::AdHoc;
+    }
+    if let Some(pw) = read_keychain_password(&paths) {
+        let kc = paths.keychain.to_str().unwrap_or_default();
+        let _ = Command::new("security")
+            .args(["unlock-keychain", "-p", &pw, kc])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+    }
+    let kc = paths.keychain.to_str().unwrap_or_default().to_string();
+    let out = Command::new("security")
+        .args(["find-identity", "-v", "-p", "codesigning", &kc])
+        .output();
+    match out {
+        Ok(o) => {
+            let text = String::from_utf8_lossy(&o.stdout);
+            match find_sign_identity(&text, SIGN_CN) {
+                Some(hash) => SignMode::LocalIdentity { hash, keychain: kc },
+                None => SignMode::AdHoc,
+            }
+        }
+        Err(_) => SignMode::AdHoc,
+    }
+}
+
+fn run_quiet(cmd: &str, args: &[&str]) -> Result<(), String> {
+    match Command::new(cmd).args(args).output() {
+        Ok(o) if o.status.success() => Ok(()),
+        Ok(o) => Err(format!(
+            "{cmd} {} failed: {}",
+            args.first().copied().unwrap_or_default(),
+            String::from_utf8_lossy(&o.stderr).trim()
+        )),
+        Err(e) => Err(format!("{cmd}: {e}")),
+    }
+}
+
+fn random_password() -> std::io::Result<String> {
+    use std::io::Read;
+    let mut bytes = [0u8; 24];
+    std::fs::File::open("/dev/urandom")?.read_exact(&mut bytes)?;
+    Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
+}
+
+/// One-time, user-run setup: create the stable local signing identity so
+/// permission grants survive rebuilds. macOS shows one password dialog to
+/// trust the certificate; afterwards `make-app`/`install` sign with it
+/// automatically. Nothing here touches the login keychain.
+fn setup_signing() -> i32 {
+    println!("== ScreenGood one-time signing setup ==");
+    println!(
+        "This creates a self-signed identity named \"{SIGN_CN}\" in a \
+         dedicated keychain file (your login keychain is not used). Every \
+         future build signed with it keeps your existing Accessibility / \
+         Input Monitoring grants — no more re-granting after rebuilds."
+    );
+    let dir = signing_dir();
+    let paths = signing_paths(&dir);
+    if matches!(resolve_sign_mode(), SignMode::LocalIdentity { .. }) {
+        println!("Already set up: {SIGN_CN} is valid and will be used automatically.");
+        println!("Next: run `screengood install`, grant both permissions once, done.");
+        return 0;
+    }
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        eprintln!("setup-signing: cannot create {}: {e}", dir.display());
+        return 1;
+    }
+    // Keychain password: generated once, kept beside the keychain (0600).
+    let pw = match read_keychain_password(&paths) {
+        Some(p) => p,
+        None => {
+            let p = match random_password() {
+                Ok(p) => p,
+                Err(e) => {
+                    eprintln!("setup-signing: cannot read /dev/urandom: {e}");
+                    return 1;
+                }
+            };
+            if let Err(e) = std::fs::write(&paths.password_file, format!("{p}\n")) {
+                eprintln!("setup-signing: cannot write password file: {e}");
+                return 1;
+            }
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(
+                    &paths.password_file,
+                    std::fs::Permissions::from_mode(0o600),
+                );
+            }
+            p
+        }
+    };
+    let kc = paths.keychain.to_str().unwrap_or_default().to_string();
+    let steps: Vec<(&str, Vec<String>)> = {
+        let mut v: Vec<(&str, Vec<String>)> = Vec::new();
+        if !paths.keychain.exists() {
+            v.push((
+                "security",
+                vec![
+                    "create-keychain".into(),
+                    "-p".into(),
+                    pw.clone(),
+                    kc.clone(),
+                ],
+            ));
+        }
+        v.push((
+            "security",
+            vec![
+                "unlock-keychain".into(),
+                "-p".into(),
+                pw.clone(),
+                kc.clone(),
+            ],
+        ));
+        v.push(("security", vec!["set-keychain-settings".into(), kc.clone()]));
+        v
+    };
+    for (cmd, args) in &steps {
+        let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        if let Err(e) = run_quiet(cmd, &refs) {
+            eprintln!("setup-signing: {e}");
+            return 1;
+        }
+    }
+    // Certificate material is generated in a temp folder; only the public
+    // cert is kept (needed to remove trust later). The private key ends
+    // up solely inside the encrypted keychain file.
+    let tmp = dir.join("setup-tmp");
+    let _ = std::fs::remove_dir_all(&tmp);
+    if let Err(e) = std::fs::create_dir_all(&tmp) {
+        eprintln!("setup-signing: {e}");
+        return 1;
+    }
+    let key_pem = tmp.join("key.pem");
+    let cert_pem = tmp.join("cert.pem");
+    let p12 = tmp.join("identity.p12");
+    let passout = format!("pass:{pw}");
+    let gen: Vec<(&str, Vec<String>)> = vec![
+        (
+            "openssl",
+            vec![
+                "req".into(),
+                "-x509".into(),
+                "-newkey".into(),
+                "rsa:2048".into(),
+                "-sha256".into(),
+                "-days".into(),
+                "3650".into(),
+                "-nodes".into(),
+                "-subj".into(),
+                format!("/CN={SIGN_CN}"),
+                "-addext".into(),
+                "keyUsage=critical,digitalSignature".into(),
+                "-addext".into(),
+                "extendedKeyUsage=critical,codeSigning".into(),
+                "-addext".into(),
+                "basicConstraints=critical,CA:FALSE".into(),
+                "-keyout".into(),
+                key_pem.to_str().unwrap_or_default().to_string(),
+                "-out".into(),
+                cert_pem.to_str().unwrap_or_default().to_string(),
+            ],
+        ),
+        (
+            "openssl",
+            vec![
+                "pkcs12".into(),
+                "-export".into(),
+                "-out".into(),
+                p12.to_str().unwrap_or_default().to_string(),
+                "-inkey".into(),
+                key_pem.to_str().unwrap_or_default().to_string(),
+                "-in".into(),
+                cert_pem.to_str().unwrap_or_default().to_string(),
+                "-name".into(),
+                SIGN_CN.into(),
+                "-passout".into(),
+                passout.clone(),
+            ],
+        ),
+        (
+            "security",
+            vec![
+                "import".into(),
+                p12.to_str().unwrap_or_default().to_string(),
+                "-k".into(),
+                kc.clone(),
+                "-P".into(),
+                pw.clone(),
+                "-T".into(),
+                "/usr/bin/codesign".into(),
+                "-T".into(),
+                "/usr/bin/security".into(),
+            ],
+        ),
+        (
+            "security",
+            vec![
+                "set-key-partition-list".into(),
+                "-S".into(),
+                "apple-tool:,apple:".into(),
+                "-s".into(),
+                "-k".into(),
+                pw.clone(),
+                kc.clone(),
+            ],
+        ),
+    ];
+    for (cmd, args) in &gen {
+        let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        if let Err(e) = run_quiet(cmd, &refs) {
+            eprintln!("setup-signing: {e}");
+            return 1;
+        }
+    }
+    if let Err(e) = std::fs::copy(&cert_pem, &paths.cert) {
+        eprintln!("setup-signing: cannot keep public cert: {e}");
+        return 1;
+    }
+    let _ = std::fs::remove_dir_all(&tmp);
+    println!("macOS will now ask for your login password ONCE to trust this certificate for code signing. That dialog is expected.");
+    let trust = Command::new("security")
+        .args([
+            "add-trusted-cert",
+            "-r",
+            "trustRoot",
+            "-p",
+            "codeSign",
+            "-k",
+            &kc,
+            paths.cert.to_str().unwrap_or_default(),
+        ])
+        .status();
+    match trust {
+        Ok(s) if s.success() => {}
+        Ok(s) => {
+            eprintln!("setup-signing: trusting the certificate was cancelled ({s}). Re-run `screengood setup-signing` when ready.");
+            return 1;
+        }
+        Err(e) => {
+            eprintln!("setup-signing: security add-trusted-cert: {e}");
+            return 1;
+        }
+    }
+    match resolve_sign_mode() {
+        SignMode::LocalIdentity { .. } => {
+            println!("Done. \"{SIGN_CN}\" is trusted and will sign every build from now on.");
+            println!("Next steps:");
+            println!("  1. screengood install        (rebuilds + installs the stable-signed app)");
+            println!(
+                "  2. Open ScreenGood once and switch it ON in Accessibility + Input Monitoring."
+            );
+            println!("  3. Reopen it. Grants now survive every future rebuild.");
+            0
+        }
+        SignMode::AdHoc => {
+            eprintln!("setup-signing: identity imported but still not valid — trust may not have been approved. Re-run this command to retry.");
+            1
+        }
     }
 }
 
@@ -712,6 +1093,65 @@ mod tests {
             b"fake-icon"
         );
         let _ = std::fs::remove_dir_all(app.parent().unwrap());
+    }
+
+    #[test]
+    fn find_sign_identity_parses_named_identity_only() {
+        let out = "\nPolicy: Code Signing\n  Matching identities\n  1) C87B4A89AB99ECF8C9C2EC70A59BC0BB1B262C76 \"ScreenGood Local Signing\"\n     1 identities found\n";
+        assert_eq!(
+            find_sign_identity(out, "ScreenGood Local Signing"),
+            Some("C87B4A89AB99ECF8C9C2EC70A59BC0BB1B262C76".to_string())
+        );
+        assert_eq!(find_sign_identity(out, "Developer ID Application"), None);
+        assert_eq!(find_sign_identity("", "ScreenGood Local Signing"), None);
+        // Quoteless/other-identity lines must not abort the scan.
+        let two = "  1) AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA \"Other Dev\"\n  2) C87B4A89AB99ECF8C9C2EC70A59BC0BB1B262C76 \"ScreenGood Local Signing\"\n";
+        assert_eq!(
+            find_sign_identity(two, "ScreenGood Local Signing"),
+            Some("C87B4A89AB99ECF8C9C2EC70A59BC0BB1B262C76".to_string())
+        );
+    }
+
+    #[test]
+    fn codesign_args_match_each_sign_mode() {
+        assert_eq!(
+            codesign_args(&SignMode::AdHoc, "/A.app"),
+            vec![
+                "--force",
+                "--sign",
+                "-",
+                "--identifier",
+                "com.screengood.app",
+                "/A.app"
+            ]
+        );
+        assert_eq!(
+            codesign_args(
+                &SignMode::LocalIdentity {
+                    hash: "ABC".into(),
+                    keychain: "/k.db".into()
+                },
+                "/A.app"
+            ),
+            vec![
+                "--keychain",
+                "/k.db",
+                "--force",
+                "--sign",
+                "ABC",
+                "--identifier",
+                "com.screengood.app",
+                "/A.app"
+            ]
+        );
+    }
+
+    #[test]
+    fn signing_paths_live_under_support_dir() {
+        let p = signing_paths(Path::new("/Users/x/Library/Application Support/ScreenGood"));
+        assert!(p.keychain.ends_with("Signing.keychain-db"));
+        assert!(p.password_file.ends_with("keychain-password.txt"));
+        assert!(p.cert.ends_with("signing-cert.pem"));
     }
 
     #[test]
