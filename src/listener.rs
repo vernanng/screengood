@@ -8,7 +8,8 @@ use crate::logic::{
     wheel_route, Action, Cooldown, Geometry, PixelAccumulator, WheelRoute, PIXEL_THRESHOLD,
 };
 use core_foundation::base::{CFType, CFTypeRef, TCFType};
-use core_foundation::dictionary::CFDictionary;
+use core_foundation::boolean::CFBoolean;
+use core_foundation::dictionary::{CFDictionary, CFDictionaryRef};
 use core_foundation::number::CFNumber;
 use core_foundation::runloop::{kCFRunLoopCommonModes, CFRunLoop};
 use core_foundation::string::CFString;
@@ -36,17 +37,61 @@ pub struct ListenerConfig {
 #[link(name = "ApplicationServices", kind = "framework")]
 extern "C" {
     fn AXIsProcessTrusted() -> bool;
+    fn AXIsProcessTrustedWithOptions(options: CFDictionaryRef) -> bool;
 }
 
 #[link(name = "CoreGraphics", kind = "framework")]
 extern "C" {
     fn CGPreflightListenEventAccess() -> bool;
+    fn CGRequestListenEventAccess() -> bool;
     fn CGEventTapEnable(tap: *mut c_void, enable: bool);
 }
 
-/// Input Monitoring + Accessibility preflight for this binary.
-pub fn permissions_ok() -> bool {
-    unsafe { AXIsProcessTrusted() && CGPreflightListenEventAccess() }
+/// Per-permission grant state for this binary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Perms {
+    pub accessibility: bool,
+    pub input_monitoring: bool,
+}
+
+impl Perms {
+    pub fn all_granted(&self) -> bool {
+        self.accessibility && self.input_monitoring
+    }
+}
+
+/// Check BEFORE asking: silent preflight of Accessibility and Input
+/// Monitoring separately (`AXIsProcessTrusted` without the prompt option,
+/// `CGPreflightListenEventAccess`). Neither call shows a dialog, opens
+/// Settings, or registers anything, so a launch whose grants are already
+/// in place is completely quiet — this runs first on every launch, and
+/// nothing is ever requested for a permission this says is granted.
+pub fn check_permissions() -> Perms {
+    Perms {
+        accessibility: unsafe { AXIsProcessTrusted() },
+        input_monitoring: unsafe { CGPreflightListenEventAccess() },
+    }
+}
+
+/// Ask only for what `check_permissions` found missing: show that
+/// permission's system dialog and register this app (still switched OFF)
+/// in its Settings list, so the user never hunts for the `+` button.
+/// Granted permissions are never re-requested. macOS gives no API to
+/// flip the switch itself — that one click must come from the user,
+/// once per permission.
+pub fn request_permissions(missing: Perms) {
+    if !missing.input_monitoring {
+        unsafe { CGRequestListenEventAccess() };
+    }
+    if !missing.accessibility {
+        // kAXTrustedCheckOptionPrompt == "AXTrustedCheckOptionPrompt"
+        let key = CFString::new("AXTrustedCheckOptionPrompt");
+        let options = CFDictionary::from_CFType_pairs(&[(
+            key.as_CFType(),
+            CFBoolean::true_value().as_CFType(),
+        )]);
+        unsafe { AXIsProcessTrustedWithOptions(options.as_concrete_TypeRef()) };
+    }
 }
 
 /// (x, y, width, height) of one scrcpy window, as in `scrcpy_bounds()`.

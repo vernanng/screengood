@@ -16,9 +16,56 @@ use logic::{Action, Geometry};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+/// GUI launches (Finder double-click) have stdout/stderr wired to
+/// /dev/null, which made startup failures completely invisible. When
+/// stdout is not a terminal, move both streams to
+/// ~/Library/Logs/ScreenGood.log so screengood and scrcpy errors survive.
+fn redirect_output_to_log_if_gui() {
+    use std::io::IsTerminal;
+    if std::io::stdout().is_terminal() {
+        return;
+    }
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+    let path = format!("{home}/Library/Logs/ScreenGood.log");
+    let Ok(cpath) = std::ffi::CString::new(path) else {
+        return;
+    };
+    unsafe {
+        let fd = libc::open(
+            cpath.as_ptr(),
+            libc::O_WRONLY | libc::O_CREAT | libc::O_APPEND,
+            0o644,
+        );
+        if fd >= 0 {
+            libc::dup2(fd, 1);
+            libc::dup2(fd, 2);
+            if fd > 2 {
+                libc::close(fd);
+            }
+        }
+    }
+    println!(
+        "\n===== screengood start pid={} args={:?} =====",
+        std::process::id(),
+        std::env::args().skip(1).collect::<Vec<_>>()
+    );
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mode = args.first().map(String::as_str).unwrap_or("mirror");
+    if matches!(
+        mode,
+        "mirror"
+            | "--mirror"
+            | "listen"
+            | "click-probe"
+            | "--click-probe"
+            | "wheel-probe"
+            | "--wheel-probe"
+    ) {
+        redirect_output_to_log_if_gui();
+    }
     let code = match mode {
         "test" | "--test" => run_test(),
         "make-app" => make_app(),
@@ -151,15 +198,39 @@ fn pass_str(p: bool) -> &'static str {
 fn ensure_tool(bin: &Path, brew_pkg: &str) {
     if bin.is_absolute() && !bin.exists() {
         println!("Installing {brew_pkg} via Homebrew...");
-        let _ = Command::new("brew").args(["install", brew_pkg]).status();
+        // Absolute brew path: Finder-launched GUI processes get a PATH
+        // without Homebrew in it.
+        let brew = ["/opt/homebrew/bin/brew", "/usr/local/bin/brew"]
+            .into_iter()
+            .find(|p| Path::new(p).exists())
+            .unwrap_or("brew");
+        let _ = Command::new(brew).args(["install", brew_pkg]).status();
     }
 }
 
-fn open_permission_panes() {
-    for pane in [
-        "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent",
-        "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
-    ] {
+/// Human names of the permissions a preflight found missing.
+fn missing_permission_names(perms: listener::Perms) -> String {
+    let mut names = Vec::new();
+    if !perms.accessibility {
+        names.push("Accessibility");
+    }
+    if !perms.input_monitoring {
+        names.push("Input Monitoring");
+    }
+    names.join(" + ")
+}
+
+/// Open Settings panes only for permissions the preflight found missing.
+/// Accessibility first, Input Monitoring last so it stays on screen.
+fn open_permission_panes(perms: listener::Perms) {
+    let mut panes = Vec::new();
+    if !perms.accessibility {
+        panes.push("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility");
+    }
+    if !perms.input_monitoring {
+        panes.push("x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent");
+    }
+    for pane in panes {
         let _ = Command::new("open").arg(pane).status();
         std::thread::sleep(std::time::Duration::from_secs(1));
     }
@@ -168,18 +239,27 @@ fn open_permission_panes() {
 /// Start the SHIFT+wheel listener in the background if permissions allow;
 /// the mirror keeps working without it.
 fn spawn_listener_if_allowed(phone: &discover::Phone) {
-    if listener::permissions_ok() {
+    // Check first, silently. Only a permission the preflight finds
+    // missing is ever requested or gets a Settings pane opened.
+    let perms = listener::check_permissions();
+    println!(
+        "Permissions preflight: Accessibility={} InputMonitoring={}",
+        perms.accessibility, perms.input_monitoring
+    );
+    if perms.all_granted() {
         listener::spawn(listener::ListenerConfig {
             adb: phone.adb.clone(),
             geo: phone.geo,
             probe: false,
         });
     } else {
+        println!("macOS blocked the SHIFT+wheel listener. Mirror still works.");
         println!(
-            "macOS blocked the SHIFT+wheel listener (Input Monitoring). Pad/mirror still work."
+            "ScreenGood registered itself under Settings > Privacy for: {}. Switch it ON there, then reopen.",
+            missing_permission_names(perms)
         );
-        println!("Allow screengood in Settings > Privacy > Input Monitoring + Accessibility, then reopen.");
-        open_permission_panes();
+        listener::request_permissions(perms);
+        open_permission_panes(perms);
     }
 }
 
@@ -208,10 +288,19 @@ fn run_listener_mode(probe: bool) -> i32 {
     println!("==============================================");
     let phone = discover::connect_phone(&tools);
     println!("\nPhone OK ({}).\n", phone.adb.serial);
-    if !listener::permissions_ok() {
-        println!("*** macOS blocked the wheel listener. Fix (1 min, once): ***");
-        println!("Allow screengood in Settings > Privacy > Input Monitoring and Accessibility, then reopen.");
-        open_permission_panes();
+    let perms = listener::check_permissions();
+    println!(
+        "Permissions preflight: Accessibility={} InputMonitoring={}",
+        perms.accessibility, perms.input_monitoring
+    );
+    if !perms.all_granted() {
+        println!("*** macOS blocked the wheel listener. Fix (1 min): ***");
+        println!(
+            "ScreenGood registered itself under Settings > Privacy for: {}. Switch it ON there, then reopen.",
+            missing_permission_names(perms)
+        );
+        listener::request_permissions(perms);
+        open_permission_panes(perms);
         return 1;
     }
     println!("Permission OK. Hold SHIFT + turn wheel. Ctrl+C to stop.");
@@ -223,7 +312,68 @@ fn run_listener_mode(probe: bool) -> i32 {
     0
 }
 
+/// Pids from `pgrep` output, excluding our own.
+fn parse_other_pids(out: &str, me: u32) -> Vec<u32> {
+    out.lines()
+        .filter_map(|l| l.trim().parse::<u32>().ok())
+        .filter(|&p| p != me)
+        .collect()
+}
+
+fn term_pid(pid: u32) {
+    unsafe { libc::kill(pid as i32, libc::SIGTERM) };
+}
+
+/// Single-instance by replacement: a second launch (for example a Finder
+/// double-click while a mirror is already running) terminates the previous
+/// screengood and its scrcpy child instead of silently fighting it over
+/// the phone's one screen capture — the loser used to exit in under a
+/// second with no visible window or error.
+fn kill_previous_instances() {
+    let me = std::process::id();
+    let Ok(out) = Command::new("/usr/bin/pgrep")
+        .args(["-x", "screengood"])
+        .output()
+    else {
+        return;
+    };
+    let others = parse_other_pids(&String::from_utf8_lossy(&out.stdout), me);
+    if others.is_empty() {
+        return;
+    }
+    println!("Replacing previous screengood instance(s): {others:?}");
+    for pid in &others {
+        // Children first (scrcpy) so phone capture releases cleanly.
+        if let Ok(kids) = Command::new("/usr/bin/pgrep")
+            .args(["-P", &pid.to_string()])
+            .output()
+        {
+            for kid in parse_other_pids(&String::from_utf8_lossy(&kids.stdout), me) {
+                term_pid(kid);
+            }
+        }
+        term_pid(*pid);
+    }
+    std::thread::sleep(std::time::Duration::from_millis(700));
+}
+
+/// PATH for child processes: make the directory holding `adb` (Homebrew
+/// bin) searchable even when launched from Finder, where the GUI session
+/// PATH is only `/usr/bin:/bin:/usr/sbin:/sbin`. Without this, scrcpy's
+/// own `adb start-server` spawn fails with "Command not found: [adb]"
+/// and the app appears to do nothing on double-click.
+fn child_env_path(adb_bin: &Path, existing: Option<&str>) -> String {
+    let base = existing
+        .filter(|s| !s.is_empty())
+        .unwrap_or("/usr/bin:/bin:/usr/sbin:/sbin");
+    match adb_bin.parent().filter(|d| !d.as_os_str().is_empty()) {
+        Some(dir) => format!("{}:{base}", dir.display()),
+        None => base.to_string(),
+    }
+}
+
 fn run_mirror_mode() -> i32 {
+    kill_previous_instances();
     let tools = discover::resolve_tools();
     ensure_tool(&tools.adb_bin, "android-platform-tools");
     ensure_tool(&tools.scrcpy_bin, "scrcpy");
@@ -264,7 +414,15 @@ fn run_mirror_mode() -> i32 {
     println!(" ANYWHERE: light SHIFT+wheel=NEXT/PREV | SHIFT+mid/right=pause");
     println!(" Profile: {profile}");
     println!("==============================================");
+    let current_path = std::env::var("PATH").ok();
     let status = Command::new(&tools.scrcpy_bin)
+        // scrcpy spawns `adb` by name (or $ADB); Finder GUI PATH lacks
+        // Homebrew, so hand it the absolute adb path explicitly.
+        .env("ADB", &tools.adb_bin)
+        .env(
+            "PATH",
+            child_env_path(&tools.adb_bin, current_path.as_deref()),
+        )
         .args(["-s", &serial, "--stay-awake"])
         .args(&args)
         .args([
@@ -282,8 +440,11 @@ fn run_mirror_mode() -> i32 {
 }
 
 /// Assemble `ScreenGood.app` next to the project dir: copy this binary in,
-/// write Info.plist, ad-hoc codesign with a stable identifier so TCC
-/// (Input Monitoring / Accessibility) grants survive rebuilds.
+/// write Info.plist, ad-hoc codesign. No keychain signing identity is
+/// used, so TCC keys the app by code hash; the stable preflight-only
+/// permission flow (see `spawn_listener_if_allowed`) keeps launches
+/// silent once granted, and grants are re-given after a rebuild only
+/// when a preflight actually fails.
 fn make_app() -> i32 {
     let dir = discover::project_dir();
     let app = dir.join("ScreenGood.app");
@@ -346,5 +507,78 @@ fn make_app() -> i32 {
             eprintln!("codesign: {e}");
             1
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_other_pids_excludes_self_and_garbage() {
+        assert_eq!(parse_other_pids("101\n202\n303\n", 202), vec![101, 303]);
+        assert_eq!(parse_other_pids("", 1), Vec::<u32>::new());
+        assert_eq!(parse_other_pids("42\n", 42), Vec::<u32>::new());
+        assert_eq!(parse_other_pids("abc\n 77 \n-5\n", 1), vec![77]);
+    }
+
+    #[test]
+    fn missing_permission_names_lists_only_ungranted() {
+        use crate::listener::Perms;
+        assert_eq!(
+            missing_permission_names(Perms {
+                accessibility: false,
+                input_monitoring: false
+            }),
+            "Accessibility + Input Monitoring"
+        );
+        assert_eq!(
+            missing_permission_names(Perms {
+                accessibility: true,
+                input_monitoring: false
+            }),
+            "Input Monitoring"
+        );
+        assert_eq!(
+            missing_permission_names(Perms {
+                accessibility: false,
+                input_monitoring: true
+            }),
+            "Accessibility"
+        );
+        assert_eq!(
+            missing_permission_names(Perms {
+                accessibility: true,
+                input_monitoring: true
+            }),
+            ""
+        );
+    }
+
+    #[test]
+    fn child_env_path_prepends_adb_dir_for_finder_launches() {
+        let adb = Path::new("/opt/homebrew/bin/adb");
+        // Finder GUI session: no PATH or minimal PATH.
+        assert_eq!(
+            child_env_path(adb, None),
+            "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+        );
+        assert_eq!(
+            child_env_path(adb, Some("")),
+            "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+        );
+        assert_eq!(
+            child_env_path(adb, Some("/usr/bin:/bin")),
+            "/opt/homebrew/bin:/usr/bin:/bin"
+        );
+        // Terminal launches keep their richer PATH, still prefixed.
+        assert_eq!(
+            child_env_path(adb, Some("/x/bin:/opt/homebrew/bin")),
+            "/opt/homebrew/bin:/x/bin:/opt/homebrew/bin"
+        );
+        assert_eq!(
+            child_env_path(Path::new("adb"), Some("/usr/bin")),
+            "/usr/bin"
+        );
     }
 }

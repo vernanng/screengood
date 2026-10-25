@@ -100,7 +100,20 @@ Then reopen the app. These permissions power the global SHIFT+wheel and
 wheel-on-mirror listener. The scrcpy mirror can open without them, but the
 custom NEXT/PREV wheel controls need the listener.
 
-The app detects a missing grant and opens the relevant Settings panes.
+Every launch checks first: the app silently preflights both permissions
+and, when both are granted, opens no dialog and no Settings pane — the
+mirror just appears. Only a permission the check finds missing is ever
+requested: the app then registers itself in just that list (no `+`
+button or file picker needed) and opens just that pane. macOS does not
+allow any app to flip its own security switch, so switching ScreenGood
+**on** there is the one manual step. Because the app is ad-hoc signed
+(no keychain identity), macOS keys grants to the build's code hash, so
+after a `make-app` rebuild the check will find them missing once more
+and you re-give them for that build. Plain launches in between never
+ask again. If a rebuild leaves a stale entry that won't take effect,
+remove ScreenGood from both lists with the `-` button and reopen the
+app so it re-registers. Each launch logs its preflight result to
+`~/Library/Logs/ScreenGood.log`.
 
 ### Tools
 
@@ -123,11 +136,13 @@ source. There is no Python runtime dependency.
 Tests:
 
 ```sh
-cargo test  # 25 unit tests, no phone needed
+cargo test  # 28 unit tests, no phone needed
 ```
 
-`make-app` uses ad-hoc signing with the stable identifier
-`com.screengood.app`, so macOS permission grants normally survive rebuilds.
+`make-app` uses ad-hoc signing (`codesign --sign -`) with the identifier
+`com.screengood.app`. No keychain code-signing identity is used, so
+macOS permission grants do **not** survive rebuilds — re-give them after
+each `make-app` (see Mac setup above).
 
 ## How it works
 
@@ -155,8 +170,13 @@ and is never committed.
 **Nothing seems to launch**
 
 `ScreenGood.app` has no window of its own. Look for the separate `scrcpy`
-mirror window; it may have opened behind another app. Avoid launching extra
-copies while one mirror is already running.
+mirror window; it may have opened behind another app. Launching the app
+again while a mirror is running replaces the old instance. Since Finder
+launches have no terminal to print errors to, GUI launches (and their
+`scrcpy` child) log to `~/Library/Logs/ScreenGood.log` — check that file
+first. Finder launches also inherit a minimal `PATH` without Homebrew;
+`screengood` passes `scrcpy` the absolute `adb` path via the `ADB`
+environment variable so double-click launch works.
 
 **Phone not found on Wi-Fi**
 
