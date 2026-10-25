@@ -32,9 +32,9 @@ docs and code general-purpose — never reintroduce app-specific wording
   keychain file under `~/Library/Application Support/ScreenGood/` (login
   keychain never touched) so grants survive rebuilds. Never auto-run it:
   trusting the cert pops a macOS password dialog only the user can answer.
-- Subcommands: `mirror` (default), `listen`, `test`, `wheel-probe`,
-  `click-probe`, `make-app`, `install`, `setup-signing`. No bash anywhere
-  in the product.
+- Subcommands: `mirror` (default), `listen`, `settings`, `test`,
+  `wheel-probe`, `click-probe`, `make-app`, `install`, `setup-signing`.
+  No bash anywhere in the product.
 
 ## CI & releases
 
@@ -62,7 +62,9 @@ docs and code general-purpose — never reintroduce app-specific wording
 
 ## Code Map
 
-- `src/main.rs` — CLI + app flow: mirror profiles, permission
+- `src/main.rs` — CLI + app flow: mirror profiles, `MIRROR_WINDOW_TITLE`
+  (short project-name title), spawns the floating title bar beside
+  scrcpy, permission
   check-then-request (preflight runs before any phone/mirror work;
   missing-only prompt via `panes_for_missing`, silent re-check at
   spawn), `kill_previous_instances` (single instance by
@@ -72,9 +74,28 @@ docs and code general-purpose — never reintroduce app-specific wording
   the `setup_signing` local identity when present), selftest.
 - `src/listener.rs` — `CGEventTap` via `core-graphics`; `check_permissions`
   (silent preflight), `request_permissions` (missing only), `scrcpy_at`
-  mirror-window detection, lifetime `run`/`spawn`.
+  mirror-window detection, `scrcpy_windows`/`scrcpy_window_bounds_for_pid`
+  for the title bar's display-rate follow loop, lifetime `run`/`spawn`.
 - `src/logic.rs` — pure constants/decisions: `PIXEL_THRESHOLD = 6.0`,
-  `COOLDOWN = 900 ms`, `SWIPE_DUR_MS = 400`, `Geometry`, `wheel_route`.
+  `COOLDOWN = 900 ms`, `SWIPE_DUR_MS = 400` (the settings defaults),
+  `Geometry`, `wheel_route`.
+- `src/settings.rs` — scroll-feel settings storage: `ScrollSettings`
+  (`scroll_step_px`/`cooldown_ms`/`swipe_ms`), forgiving `key = value`
+  parse + clamp, `settings_path`/`load`/`save_to`
+  (`~/Library/Application Support/ScreenGood/settings.txt`,
+  `SCREENGOOD_SETTINGS` override). Read once at launch.
+- `src/settings_window.rs` — native AppKit Settings window via `objc2`
+  (upstream `hello_world_app` delegate pattern): three sliders, Save
+  writes the settings file, applies on next launch, never touches the
+  phone.
+- `src/title_bar.rs` — floating Settings tab (`title-bar` helper
+  spawned by mirror mode): gear Settings button on the left edge of
+  the mirror (title bar stays draggable), sticks to the scrcpy window
+  via Accessibility move/resize notifications (owner-pid bounds poll
+  as fallback), opens `settings` as a
+  sibling process, exits with the mirror. The scrcpy window is another
+  process's, so this attached panel — not a literal title-bar button —
+  is the supported shape; native close/minimize stay clickable.
 - `src/discover.rs` — `resolve_tools`, `connect_phone` (USB-first,
   `phone-ip.txt`, mDNS `_adb-tls-connect._tcp.local.`, `wm size`),
   `project_dir`.
@@ -98,8 +119,10 @@ docs and code general-purpose — never reintroduce app-specific wording
 
 - **SHIFT+wheel is the reference.** On-screen plain wheel and SHIFT+wheel
   anywhere share one NEXT/PREV path (same normalization, accumulator,
-  cooldown, swipe). `SWIPE_DUR_MS = 400` is user-tuned; change only on
-  explicit request.
+  cooldown, swipe). `SWIPE_DUR_MS = 400` is the user-tuned default;
+  `screengood settings` is the explicit, user-driven way to change the
+  effective step/cooldown/swipe values — defaults never change silently,
+  and both wheel routes always share the one configured path.
 - **Check before asking for permissions.** Preflight Accessibility and
   Input Monitoring separately on every launch, before any phone or
   mirror work; request/open a Settings pane only for one that is

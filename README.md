@@ -29,7 +29,7 @@ with USB debugging or Wireless debugging · [Homebrew](https://brew.sh)
 
 Contents: [Download](#download) · [Quick start](#quick-start) ·
 [Wi-Fi or USB-C](#wi-fi-or-usb-c) · [Controls](#controls) ·
-[One-time setup](#one-time-setup) · [Build from source](#build-from-source) ·
+[Settings](#settings) · [One-time setup](#one-time-setup) · [Build from source](#build-from-source) ·
 [Commands](#commands) · [How it works](#how-it-works) ·
 [Troubleshooting](#troubleshooting) · [Uninstall](#uninstall)
 
@@ -153,6 +153,44 @@ Watching on a monitor is optional and independent: mirror the phone to
 your monitor separately (wireless display or cable) if you want the same
 screen there while you control it from the Mac.
 
+## Settings
+
+Scroll feel is adjustable in a small native window.
+While mirroring, click the floating gear **Settings** tab on the
+left edge of the mirror window.
+It sticks to the window as it moves, and the whole title bar stays
+free, so the window is still easy to drag.
+The mirror's main window title is just **ScreenGood**.
+
+The same window can also be opened from Terminal:
+
+```sh
+./target/release/screengood settings
+```
+
+For an installed app without a mirror running, the Terminal form is
+`/Applications/ScreenGood.app/Contents/MacOS/screengood settings`.
+
+Three sliders:
+
+- **Scroll step** — wheel movement per up/down step. Lower is more
+  sensitive.
+- **Cooldown** — pause between steps. Higher means fewer accidental
+  double steps.
+- **Swipe duration** — phone swipe time per step, in milliseconds.
+
+**Save** writes `~/Library/Application Support/ScreenGood/settings.txt`.
+Changes apply on next launch, so reopen ScreenGood to use them.
+Each launch logs its effective values as `Scroll settings: ...`.
+**Defaults** restores step 6 px, cooldown 900 ms, swipe 400 ms.
+Deleting the settings file does the same.
+
+The window needs no phone. It can be opened while mirroring; the
+floating Settings button follows the mirror window and disappears in
+fullscreen or when the mirror closes.
+Only scroll feel is adjustable; the mirror profiles above stay fixed.
+`SCREENGOOD_SETTINGS` overrides the settings file path.
+
 ## One-time setup
 
 ### Android
@@ -269,6 +307,7 @@ ditto -c -k --sequesterRsrc --keepParent ScreenGood.app ScreenGood-macOS-arm64.z
 ./target/release/screengood              # mirror on the Mac (default)
 ./target/release/screengood mirror       # same, explicit
 ./target/release/screengood listen       # wheel/click listener only, no mirror window
+./target/release/screengood settings     # scroll-feel Settings window (applies on next launch)
 ./target/release/screengood test         # built-in selftest; no phone needed
 ./target/release/screengood wheel-probe  # 20 s raw wheel/click event log (diagnostics)
 ./target/release/screengood click-probe  # click-focused probe alias
@@ -280,7 +319,7 @@ ditto -c -k --sequesterRsrc --keepParent ScreenGood.app ScreenGood-macOS-arm64.z
 Tests and checks (no phone needed):
 
 ```sh
-cargo test                                         # 36 unit tests
+cargo test                                         # 46 unit tests
 cargo clippy --all-targets --locked -- -D warnings # same lint CI runs
 cargo fmt --check
 ./target/release/screengood test  # prints SELFTEST OK - DOWN=NEXT, UP=PREV
@@ -300,10 +339,13 @@ version.
 
 | File | Role |
 |---|---|
-| `src/main.rs` | Commands and app flow: mirror profiles, permission check-then-request, single-instance replacement, GUI log redirect, `make-app`/`install`/`setup-signing`, selftest |
+| `src/main.rs` | Commands and app flow: mirror profiles and the ScreenGood main window title, permission check-then-request, single-instance replacement, GUI log redirect, `settings`/title-bar dispatch, `make-app`/`install`/`setup-signing`, selftest |
 | `src/discover.rs` | Phone discovery: USB-first, saved Wi-Fi address (`phone-ip.txt`), mDNS `_adb-tls-connect._tcp.local.`, real screen size via `wm size` |
 | `src/listener.rs` | Direct `CGEventTap` (via `core-graphics`): wheel/click handling, mirror-window detection, consumed-event suppression, tap auto-recovery, permission preflight/request |
-| `src/logic.rs` | Pure decisions: NEXT/PREV mapping, light-scroll pixel accumulation (6 px step), 900 ms cooldown, swipe geometry, 400 ms swipe duration |
+| `src/logic.rs` | Pure decisions: NEXT/PREV mapping, light-scroll pixel accumulation (6 px default step), 900 ms default cooldown, swipe geometry, 400 ms default swipe duration |
+| `src/settings.rs` | Scroll-feel settings file: step/cooldown/swipe values, forgiving parse + clamp, loaded once at launch |
+| `src/settings_window.rs` | Native AppKit Settings window (`objc2`): three sliders, Save applies on next launch |
+| `src/title_bar.rs` | Floating gear Settings tab on the mirror's left edge: sticks to the scrcpy window via Accessibility move/resize events (poll fallback) |
 | `src/adb.rs` | Pinned-serial `adb -s <serial> shell input` commands with a 5 s timeout |
 | `assets/` | App icon: `icon-1024.png` master + `AppIcon.icns` (made with `sips` + `iconutil`) |
 

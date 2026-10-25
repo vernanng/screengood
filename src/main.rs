@@ -2,19 +2,29 @@
 //! the entire phone with the Mac mouse (Wi-Fi or USB-C).
 //!
 //! Subcommands: `mirror` (default, scrcpy + listener), `listen`,
-//! `test`, `click-probe`, `make-app`, `install`, `setup-signing`. Legacy `--mirror`/
+//! `settings` (native scroll-feel window), `test`, `click-probe`,
+//! `make-app`, `install`, `setup-signing`. Legacy `--mirror`/
 //! `--test`/`--click-probe` flags are accepted as aliases. Mirror is the
 //! only screen mode (pad mode was removed by user decision, 2026-10-25).
 
 mod adb;
+mod ax;
 mod discover;
 mod listener;
 mod logic;
+mod settings;
+mod settings_window;
+mod title_bar;
 
 use adb::Adb;
 use logic::{Action, Geometry};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+/// Main mirror window title: project name only, so the title bar stays
+/// short and easy to grab. The listener recognizes the scrcpy window by
+/// its owner/process (the legacy long title is still accepted there).
+const MIRROR_WINDOW_TITLE: &str = "ScreenGood";
 
 /// GUI launches (Finder double-click) have stdout/stderr wired to
 /// /dev/null, which made startup failures completely invisible. When
@@ -67,6 +77,8 @@ fn main() {
         redirect_output_to_log_if_gui();
     }
     let code = match mode {
+        "settings" => settings_window::run_settings_window(),
+        "title-bar" => title_bar::run_title_bar(),
         "test" | "--test" => run_test(),
         "make-app" => make_app(),
         "install" => install_app(),
@@ -76,7 +88,7 @@ fn main() {
         }
         "mirror" | "--mirror" => run_mirror_mode(),
         other => {
-            eprintln!("unknown mode: {other}\nusage: screengood [mirror|listen|test|click-probe|wheel-probe|make-app|install|setup-signing]");
+            eprintln!("unknown mode: {other}\nusage: screengood [mirror|listen|settings|test|click-probe|wheel-probe|make-app|install|setup-signing]");
             2
         }
     };
@@ -174,6 +186,30 @@ fn run_test() -> i32 {
     ok &= pass;
     println!("  wheel route shift/mirror/elsewhere [{}]", pass_str(pass));
 
+    // Main window title: short project name only.
+    let pass = MIRROR_WINDOW_TITLE == "ScreenGood";
+    ok &= pass;
+    println!("  mirror main title is ScreenGood [{}]", pass_str(pass));
+
+    // Scroll settings: file round-trip, plus the values a launch now uses.
+    let probe_settings = settings::ScrollSettings {
+        scroll_step_px: 3.0,
+        cooldown_ms: 100,
+        swipe_ms: 250,
+    };
+    let pass =
+        settings::ScrollSettings::parse(&probe_settings.to_file_contents()) == probe_settings;
+    ok &= pass;
+    println!("  scroll settings file round-trip [{}]", pass_str(pass));
+    let effective = settings::load();
+    let pass = effective == effective.validated();
+    ok &= pass;
+    println!(
+        "  scroll settings effective {} [{}]",
+        effective.summary(),
+        pass_str(pass)
+    );
+
     println!(
         "SELFTEST {}",
         if ok {
@@ -261,6 +297,7 @@ fn spawn_listener_if_allowed(phone: &discover::Phone) {
         listener::spawn(listener::ListenerConfig {
             adb: phone.adb.clone(),
             geo: phone.geo,
+            scroll: settings::load(),
             probe: false,
         });
     } else {
@@ -283,6 +320,7 @@ fn run_listener_mode(probe: bool) -> i32 {
         listener::run(listener::ListenerConfig {
             adb: Adb::new(tools.adb_bin, serial),
             geo: Geometry::default(),
+            scroll: settings::load(),
             probe: true,
         });
         return 0;
@@ -316,6 +354,7 @@ fn run_listener_mode(probe: bool) -> i32 {
     listener::run(listener::ListenerConfig {
         adb: phone.adb,
         geo: phone.geo,
+        scroll: settings::load(),
         probe: false,
     });
     0
@@ -381,6 +420,27 @@ fn child_env_path(adb_bin: &Path, existing: Option<&str>) -> String {
     }
 }
 
+/// Floating Settings button that sits on the mirror window while
+/// scrcpy runs. Best-effort: the mirror works without it, so a spawn
+/// failure only logs.
+fn spawn_title_bar() -> Option<std::process::Child> {
+    let exe = std::env::current_exe().ok()?;
+    match Command::new(exe)
+        .arg("title-bar")
+        .env(
+            "SCREENGOOD_TITLEBAR_PARENT_PID",
+            std::process::id().to_string(),
+        )
+        .spawn()
+    {
+        Ok(child) => Some(child),
+        Err(e) => {
+            eprintln!("title bar failed to start: {e}");
+            None
+        }
+    }
+}
+
 fn run_mirror_mode() -> i32 {
     kill_previous_instances();
     // Check BEFORE touching the phone or opening the mirror: a missing
@@ -440,10 +500,11 @@ fn run_mirror_mode() -> i32 {
     println!(" MIRROR MODE (scrcpy): PHONE SCREEN on Mac -> {serial}");
     println!(" click=TAP | drag=swipe | wheel=NEXT/PREV | right-click=Back (inside mirror)");
     println!(" ANYWHERE: light SHIFT+wheel=NEXT/PREV | SHIFT+mid/right=pause");
+    println!(" Settings button: floating tab on the left edge of the mirror");
     println!(" Profile: {profile}");
     println!("==============================================");
     let current_path = std::env::var("PATH").ok();
-    let status = Command::new(&tools.scrcpy_bin)
+    let mut scrcpy_child = match Command::new(&tools.scrcpy_bin)
         // scrcpy spawns `adb` by name (or $ADB); Finder GUI PATH lacks
         // Homebrew, so hand it the absolute adb path explicitly.
         .env("ADB", &tools.adb_bin)
@@ -453,15 +514,25 @@ fn run_mirror_mode() -> i32 {
         )
         .args(["-s", &serial, "--stay-awake"])
         .args(&args)
-        .args([
-            "--window-title",
-            "Android - click=tap, light SHIFT+wheel=NEXT/PREV, SHIFT+click=tap",
-        ])
-        .status();
+        .args(["--window-title", MIRROR_WINDOW_TITLE])
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(e) => {
+            eprintln!("scrcpy failed to start: {e}");
+            return 1;
+        }
+    };
+    let mut title_bar_child = spawn_title_bar();
+    let status = scrcpy_child.wait();
+    if let Some(mut child) = title_bar_child.take() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
     match status {
         Ok(s) => s.code().unwrap_or(1),
         Err(e) => {
-            eprintln!("scrcpy failed to start: {e}");
+            eprintln!("scrcpy failed while running: {e}");
             1
         }
     }

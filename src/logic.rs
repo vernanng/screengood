@@ -5,10 +5,13 @@
 use std::time::{Duration, Instant};
 
 /// Light scroll: ~6px of accumulated wheel movement fires one step.
+/// Default for the `scroll_step_px` setting (see `crate::settings`).
 pub const PIXEL_THRESHOLD: f64 = 6.0;
 /// Minimum time between two fired steps (prevents double-fire).
+/// Default for the `cooldown_ms` setting.
 pub const COOLDOWN: Duration = Duration::from_millis(900);
 /// Duration of the NEXT/PREV `adb shell input swipe`, in milliseconds.
+/// User-tuned default for the `swipe_ms` setting.
 pub const SWIPE_DUR_MS: u32 = 400;
 /// Accumulator resets when wheel ticks pause longer than this.
 pub const ACCUM_RESET: Duration = Duration::from_millis(350);
@@ -69,16 +72,33 @@ pub fn decide(dx: f64, dy: f64) -> Option<Action> {
 }
 
 /// Accumulates sub-threshold pixel deltas until they add up to one step.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct PixelAccumulator {
     pub acc_dx: f64,
     pub acc_dy: f64,
     pub last: Option<Instant>,
+    /// Pixels of wheel movement per step (`PIXEL_THRESHOLD` unless set).
+    pub threshold: f64,
+}
+
+impl Default for PixelAccumulator {
+    fn default() -> Self {
+        Self::with_threshold(PIXEL_THRESHOLD)
+    }
 }
 
 impl PixelAccumulator {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn with_threshold(threshold: f64) -> Self {
+        Self {
+            acc_dx: 0.0,
+            acc_dy: 0.0,
+            last: None,
+            threshold,
+        }
     }
 
     pub fn accumulate(&mut self, dx: f64, dy: f64, now: Instant) -> Option<Action> {
@@ -90,7 +110,7 @@ impl PixelAccumulator {
         self.last = Some(now);
         self.acc_dx += dx;
         self.acc_dy += dy;
-        if self.acc_dx.abs().max(self.acc_dy.abs()) < PIXEL_THRESHOLD {
+        if self.acc_dx.abs().max(self.acc_dy.abs()) < self.threshold {
             return None;
         }
         let action = decide(self.acc_dx, self.acc_dy);
@@ -104,20 +124,31 @@ impl PixelAccumulator {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Cooldown {
     pub last_fire: Option<Instant>,
+    /// Minimum time between fires (`COOLDOWN` unless set).
+    pub cooldown: Duration,
+}
+
+impl Default for Cooldown {
+    fn default() -> Self {
+        Self::with_cooldown(COOLDOWN)
+    }
 }
 
 impl Cooldown {
-    pub fn new() -> Self {
-        Self::default()
+    pub fn with_cooldown(cooldown: Duration) -> Self {
+        Self {
+            last_fire: None,
+            cooldown,
+        }
     }
 
-    /// Returns true (and records the fire time) when COOLDOWN has elapsed.
+    /// Returns true (and records the fire time) when the cooldown elapsed.
     pub fn try_fire(&mut self, now: Instant) -> bool {
         if let Some(last_fire) = self.last_fire {
-            if now.saturating_duration_since(last_fire) < COOLDOWN {
+            if now.saturating_duration_since(last_fire) < self.cooldown {
                 return false;
             }
         }
@@ -196,11 +227,29 @@ mod tests {
 
     #[test]
     fn cooldown_blocks_and_allows() {
-        let mut cd = Cooldown::new();
+        let mut cd = Cooldown::default();
         let t0 = Instant::now();
         assert!(cd.try_fire(t0));
         assert!(!cd.try_fire(t0 + Duration::from_millis(100)));
         assert!(cd.try_fire(t0 + Duration::from_millis(901)));
+    }
+
+    #[test]
+    fn custom_threshold_and_cooldown_are_honored() {
+        let mut acc = PixelAccumulator::with_threshold(3.0);
+        let t0 = Instant::now();
+        assert_eq!(acc.accumulate(0.0, -2.0, t0), None);
+        assert_eq!(
+            acc.accumulate(0.0, -2.0, t0 + Duration::from_millis(10)),
+            Some(Action::Next)
+        );
+        let mut cd = Cooldown::with_cooldown(Duration::from_millis(100));
+        assert!(cd.try_fire(t0));
+        assert!(!cd.try_fire(t0 + Duration::from_millis(50)));
+        assert!(cd.try_fire(t0 + Duration::from_millis(100)));
+        // Defaults still carry the tuned constants.
+        assert_eq!(PixelAccumulator::new().threshold, PIXEL_THRESHOLD);
+        assert_eq!(Cooldown::default().cooldown, COOLDOWN);
     }
 
     #[test]

@@ -7,6 +7,7 @@ use crate::adb::Adb;
 use crate::logic::{
     wheel_route, Action, Cooldown, Geometry, PixelAccumulator, WheelRoute, PIXEL_THRESHOLD,
 };
+use crate::settings::ScrollSettings;
 use core_foundation::base::{CFType, CFTypeRef, TCFType};
 use core_foundation::boolean::CFBoolean;
 use core_foundation::dictionary::{CFDictionary, CFDictionaryRef};
@@ -30,6 +31,8 @@ use std::time::{Duration, Instant};
 pub struct ListenerConfig {
     pub adb: Adb,
     pub geo: Geometry,
+    /// Scroll feel loaded at launch (`crate::settings`); fixed per run.
+    pub scroll: ScrollSettings,
     /// click-probe mode: log middle/right presses for 20s, then exit.
     pub probe: bool,
 }
@@ -95,7 +98,7 @@ pub fn request_permissions(missing: Perms) {
 }
 
 /// (x, y, width, height) of one scrcpy window, as in `scrcpy_bounds()`.
-type Bounds = (f64, f64, f64, f64);
+pub type Bounds = (f64, f64, f64, f64);
 
 static BOUNDS_CACHE: Mutex<Option<(Instant, Vec<Bounds>)>> = Mutex::new(None);
 
@@ -174,8 +177,27 @@ fn point_in_bounds(x: f64, y: f64, bounds: Bounds) -> bool {
     bx <= x && x <= bx + bw && by <= y && y <= by + bh
 }
 
-/// Port of `scrcpy_bounds()`'s window query; empty on any failure.
-fn query_scrcpy_bounds() -> Vec<Bounds> {
+fn bounds_from_dict(
+    dict: &CFDictionary,
+    key_x: &CFString,
+    key_y: &CFString,
+    key_w: &CFString,
+    key_h: &CFString,
+) -> Bounds {
+    match dict_value_dict(dict, unsafe { kCGWindowBounds } as *const c_void) {
+        Some(bounds) => (
+            dict_value_f64(&bounds, key_x),
+            dict_value_f64(&bounds, key_y),
+            dict_value_f64(&bounds, key_w),
+            dict_value_f64(&bounds, key_h),
+        ),
+        None => (0.0, 0.0, 0.0, 0.0),
+    }
+}
+
+/// Port of `scrcpy_bounds()`'s window query, with owner pids; empty on
+/// any failure.
+fn query_scrcpy_windows() -> Vec<(Bounds, i32)> {
     let windows = match copy_window_info(
         kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements,
         kCGNullWindowID,
@@ -196,21 +218,54 @@ fn query_scrcpy_bounds() -> Vec<Bounds> {
         if !is_scrcpy_window(&dict) {
             continue;
         }
-        let bounds = match dict_value_dict(&dict, unsafe { kCGWindowBounds } as *const c_void) {
-            Some(b) => b,
-            None => {
-                out.push((0.0, 0.0, 0.0, 0.0));
-                continue;
-            }
-        };
-        out.push((
-            dict_value_f64(&bounds, &key_x),
-            dict_value_f64(&bounds, &key_y),
-            dict_value_f64(&bounds, &key_w),
-            dict_value_f64(&bounds, &key_h),
-        ));
+        let pid = dict_value_i32(&dict, unsafe { kCGWindowOwnerPID } as *const c_void);
+        out.push((bounds_from_dict(&dict, &key_x, &key_y, &key_w, &key_h), pid));
     }
     out
+}
+
+fn query_scrcpy_bounds() -> Vec<Bounds> {
+    query_scrcpy_windows()
+        .into_iter()
+        .map(|(bounds, _)| bounds)
+        .collect()
+}
+
+fn query_window_bounds_for_pid(pid: i32) -> Option<Bounds> {
+    let windows = copy_window_info(
+        kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements,
+        kCGNullWindowID,
+    )?;
+    let key_x = CFString::new("X");
+    let key_y = CFString::new("Y");
+    let key_w = CFString::new("Width");
+    let key_h = CFString::new("Height");
+    for ptr in windows.get_all_values() {
+        let dict = match cf_type(ptr).and_then(|t| t.downcast::<CFDictionary>()) {
+            Some(d) => d,
+            None => continue,
+        };
+        if dict_value_i32(&dict, unsafe { kCGWindowOwnerPID } as *const c_void) == pid {
+            return Some(bounds_from_dict(&dict, &key_x, &key_y, &key_w, &key_h));
+        }
+    }
+    None
+}
+
+/// Fresh scrcpy windows (bounds + owner pid) for the floating Settings
+/// button's follow timer. Bypasses the event path's 500ms cache so the
+/// button tracks window moves smoothly.
+pub fn scrcpy_windows() -> Vec<(Bounds, i32)> {
+    std::panic::catch_unwind(query_scrcpy_windows).unwrap_or_default()
+}
+
+/// Fast follow path once the title bar knows scrcpy's pid: one owner-pid
+/// match per tick, with no name/process-path probing of other windows.
+pub fn scrcpy_window_bounds_for_pid(pid: i32) -> Option<Bounds> {
+    if pid <= 0 {
+        return None;
+    }
+    std::panic::catch_unwind(|| query_window_bounds_for_pid(pid)).unwrap_or_default()
 }
 
 fn scrcpy_bounds() -> Vec<Bounds> {
@@ -247,16 +302,14 @@ fn scroll_deltas(
     fixed_dy: f64,
     line_dx: i64,
     line_dy: i64,
+    threshold: f64,
 ) -> (f64, f64) {
     if point_dx != 0 || point_dy != 0 {
         (point_dx as f64, point_dy as f64)
     } else if fixed_dx != 0.0 || fixed_dy != 0.0 {
         (fixed_dx, fixed_dy)
     } else {
-        (
-            line_dx as f64 * PIXEL_THRESHOLD,
-            line_dy as f64 * PIXEL_THRESHOLD,
-        )
+        (line_dx as f64 * threshold, line_dy as f64 * threshold)
     }
 }
 
@@ -332,9 +385,12 @@ fn handle_scroll(event: &CGEvent) -> CallbackResult {
     let ldy = event.get_integer_value_field(EventField::SCROLL_WHEEL_EVENT_DELTA_AXIS_1);
     // SHIFT+wheel and wheeling on the mirror deliberately share this exact
     // normalization, accumulator, cooldown, and adb swipe below.
-    let (dx, dy) = scroll_deltas(pdx, pdy, fdx, fdy, ldx, ldy);
+    let (probe, threshold) = lock_state()
+        .map(|st| (st.cfg.probe, st.acc.threshold))
+        .unwrap_or((false, PIXEL_THRESHOLD));
+    let (dx, dy) = scroll_deltas(pdx, pdy, fdx, fdy, ldx, ldy, threshold);
     let on_mirror = scrcpy_at(x, y);
-    if lock_state().map(|st| st.cfg.probe).unwrap_or(false) {
+    if probe {
         println!(
             "[{}] WHEEL shift={} at=({:.0},{:.0}) mirror={} route={:?} pt=({},{}) fixed=({:.2},{:.2}) line=({},{}) norm=({:.1},{:.1})",
             now_hms(),
@@ -365,7 +421,7 @@ fn handle_scroll(event: &CGEvent) -> CallbackResult {
                             let cmd = st.cfg.adb.swipe_action_cmd(
                                 st.cfg.geo,
                                 action,
-                                crate::logic::SWIPE_DUR_MS,
+                                st.cfg.scroll.swipe_ms,
                             );
                             Some((st.cfg.adb.clone(), cmd, action))
                         }
@@ -459,10 +515,12 @@ fn tap_callback(_proxy: CGEventTapProxy, etype: CGEventType, event: &CGEvent) ->
 /// (probe mode exits the process after 20s).
 pub fn run(cfg: ListenerConfig) {
     let probe = cfg.probe;
+    let scroll = cfg.scroll;
+    println!("Scroll settings: {}", scroll.summary());
     let new_state = Mutex::new(ListenerState {
         cfg,
-        acc: PixelAccumulator::new(),
-        cooldown: Cooldown::new(),
+        acc: PixelAccumulator::with_threshold(scroll.scroll_step_px),
+        cooldown: Cooldown::with_cooldown(Duration::from_millis(scroll.cooldown_ms)),
     });
     if let Err(returned) = STATE.set(new_state) {
         if let Some(existing) = STATE.get() {
@@ -535,10 +593,12 @@ mod tests {
 
     #[test]
     fn scroll_deltas_cover_point_fixed_and_line_wheels() {
-        assert_eq!(scroll_deltas(2, 0, 9.0, 9.0, 9, 9), (2.0, 0.0));
-        assert_eq!(scroll_deltas(0, 0, -0.25, 0.0, 9, 9), (-0.25, 0.0));
-        assert_eq!(scroll_deltas(0, 0, 0.0, 0.0, 0, -1), (0.0, -6.0));
-        assert_eq!(scroll_deltas(0, 0, 0.0, 0.0, 2, 0), (12.0, 0.0));
+        assert_eq!(scroll_deltas(2, 0, 9.0, 9.0, 9, 9, 6.0), (2.0, 0.0));
+        assert_eq!(scroll_deltas(0, 0, -0.25, 0.0, 9, 9, 6.0), (-0.25, 0.0));
+        assert_eq!(scroll_deltas(0, 0, 0.0, 0.0, 0, -1, 6.0), (0.0, -6.0));
+        assert_eq!(scroll_deltas(0, 0, 0.0, 0.0, 2, 0, 6.0), (12.0, 0.0));
+        // Line wheels scale by the configured step: one notch, one step.
+        assert_eq!(scroll_deltas(0, 0, 0.0, 0.0, 0, -1, 10.0), (0.0, -10.0));
     }
 
     #[test]
