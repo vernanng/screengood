@@ -365,7 +365,7 @@ if ! check_trust; then
   open "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent" 2>/dev/null
   sleep 1
   open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility" 2>/dev/null
-  echo "Tip: the pad in Android-Mouse.command needs no permission (clicks land in its own window)."
+  echo "Tip: the scrcpy mirror in Android-Mouse.command needs no permission (clicks land in its own window)."
   read -p "Press Enter to close: " _
   exit 1
 fi

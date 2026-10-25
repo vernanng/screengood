@@ -18,15 +18,12 @@ Double-click a launcher (or run it from Terminal):
   (59–61 fps sustained even while a second encode was running), and the
   smaller-than-native frame keeps encode/decode time near the floor.
   **WiFi = the previous "100 buffer video audio" smooth profile** —
-  414×900 with 100 ms video/audio buffers, kept for jitter absorption. From Terminal,
-  `./Android-Mouse.command --pad` uses the no-screen TV mode instead: a blank
-  phone-shaped pad window, watch the TV, no scrcpy lag, sound from the TV.
-- `Reels-Scroll.command` — listener only, no pad/mirror.
+  414×900 with 100 ms video/audio buffers, kept for jitter absorption.
+  `--pad` was removed and now errors (exit 1); use the mirror.
+- `Reels-Scroll.command` — listener only, no mirror.
 
 Controls:
 
-- Pad (`--pad`): click = tap same spot (center = pause) · drag = swipe ·
-  wheel = NEXT/PREV · right-click = Android Back · Space = pause · ↑/↓ = PREV/NEXT
 - Anywhere on the Mac: light **SHIFT+wheel** down = NEXT, up = PREV ·
   **SHIFT+middle-click** (or SHIFT+right-click) = video pause/resume
 - In the scrcpy mirror (the default): click/drag work as touch; plain wheel
@@ -44,7 +41,8 @@ Controls:
 3. macOS permission for the SHIFT+wheel listener: allow Terminal in
    Settings → Privacy → Input Monitoring **and** Accessibility, then fully quit
    Terminal (Cmd+Q) and reopen. The launchers detect this and open the right
-   panes. The pad needs no permission and keeps working without it.
+   panes. The mirror itself needs no such permission; only the SHIFT+wheel
+   listener does, so mirror click/drag keeps working without it.
 4. Dependencies: Homebrew `android-platform-tools`, `python`, `scrcpy`
    (mirror only) — auto-installed if missing. `pynput` is used from the system
    Python if present, otherwise from a project `.venv` next to the launchers
@@ -57,16 +55,15 @@ Controls:
 and the only code in git.** Shared bash — tool resolution, phone
 discovery/connection (`connect_phone`, USB preferred), the permission probe,
 and the `pynput` bootstrap — lives once in `fb-reels-lib.sh`, which both
-launchers source; keep all three files together. Each launcher embeds its
-Python helper in a heredoc and rewrites it on every run:
+launchers source; keep all three files together. `Reels-Scroll.command`
+embeds its Python helper in a heredoc and rewrites it on every run:
 
 - `Reels-Scroll.command` (`write_python`) → `fb-reels-scroll.py`
-- `Android-Mouse.command` (`write_pad`) → `fb-reels-pad.py`
 
 Editing a `.py` file directly is lost on the next launch. Edit the heredoc in
 the `.command` file instead. `Android-Mouse.command` regenerates
 `fb-reels-scroll.py` via `Reels-Scroll.command --test` on every launch too, so
-listener fixes apply to B mode immediately.
+listener fixes apply to the mirror immediately.
 
 Paths are relative to wherever the launchers live (~/projects/screen-mirror), tools are
 found via Homebrew's prefix or `PATH`, and swipe/tap points are computed from
@@ -79,9 +76,8 @@ Maintained selftests, no phone needed:
 
 ```sh
 ./Reels-Scroll.command --test     # wheel mapping, coords, no-double-fire, light scroll
-./Android-Mouse.command --test    # pad coordinate mapping
+./Android-Mouse.command --test    # syntax, --pad removal check, plus Reels selftest
 python3 fb-reels-scroll.py --test # same as above, incl. with ADB_SERIAL set
-python3 fb-reels-pad.py --test
 ./Reels-Scroll.command --click-probe  # 20s: are middle/right clicks seen at all?
 ```
 
